@@ -19,6 +19,10 @@ const UI = {
 const FIRST_MIDI = 21; // A0
 const N_KEYS = 88;
 
+const KEYBOARD_DEPTH = 0.24;          // mjcfPiano の baseL と合わせる
+const KEY_HINGE_Y = KEYBOARD_DEPTH - 0.02; // 支点を奥へ（0.22）
+
+
 // ここを変えると “デフォルト曲” を変えられます
 const DEFAULT_MIDI_URL = "./midis/default.mid";
 
@@ -66,19 +70,20 @@ function buildKeyInfos() {
     if (black) x = (whiteIndex - 0.5) * whitePitch;
     else { x = whiteIndex * whitePitch; whiteIndex += 1; }
 
-    // 黒鍵を奥（+y）にずらす
-    const y = black ? 0.060 : 0.000;
-
-    // 白鍵はベース上面に乗るように、黒鍵はさらに少し高く
-    const pivotZ = black ? 0.040 : 0.030;
-
     infos.push({
-      midi, black, x, y,
+      midi, black, x,
+      // 支点は全キー共通で奥側
+      pivotY: KEY_HINGE_Y,
+
       width:  black ? 0.014 : 0.022,
       length: black ? 0.090 : 0.140,
       height: 0.020,
-      pivotZ,
-      pressAngle: black ? -0.10 : -0.12
+
+      // 黒鍵は少し高く
+      pivotZ: black ? 0.040 : 0.030,
+
+      // キーが手前へ伸びるので、押下角は正にする
+      pressAngle: black ? 0.10 : 0.12
     });
   }
 
@@ -86,6 +91,7 @@ function buildKeyInfos() {
   for (const k of infos) k.x -= centerX;
   return infos;
 }
+
 
 const keyInfos = buildKeyInfos();
 
@@ -120,11 +126,10 @@ function mjcfPiano(keys) {
     const hz = (k.height / 2).toFixed(4);
     const rgba = k.black ? "0.08 0.08 0.08 1" : "0.95 0.95 0.95 1";
 
-    //xml += `      <body name="key_${i}" pos="${k.x.toFixed(4)} 0 ${k.pivotZ.toFixed(4)}">\n`;
-    xml += `      <body name="key_${i}" pos="${k.x.toFixed(4)} ${k.y.toFixed(4)} ${k.pivotZ.toFixed(4)}">\n`;
+    xml += `      <body name="key_${i}" pos="${k.x.toFixed(4)} ${k.pivotY.toFixed(4)} ${k.pivotZ.toFixed(4)}">\n`;
+    xml += `        <joint name="key_joint_${i}" axis="1 0 0" range="0 ${k.pressAngle.toFixed(4)}"/>\n`;
+    xml += `        <geom name="key_geom_${i}" type="box" size="${hx} ${hy} ${hz}" pos="0 -${hy} 0" rgba="${rgba}"/>\n`;
 
-    xml += `        <joint name="key_joint_${i}" axis="1 0 0" range="${k.pressAngle.toFixed(4)} 0"/>\n`;
-    xml += `        <geom name="key_geom_${i}" type="box" size="${hx} ${hy} ${hz}" pos="0 ${hy} 0" rgba="${rgba}"/>\n`;
     xml += `      </body>\n`;
   }
 
