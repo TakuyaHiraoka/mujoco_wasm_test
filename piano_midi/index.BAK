@@ -16,14 +16,14 @@
   }
   </script>
 
-  <!-- SoundFont（任意）: チェックON時だけ使う -->
+  <!-- SoundFont（任意） -->
   <script src="https://cdn.jsdelivr.net/npm/soundfont-player@0.12.0/dist/soundfont-player.min.js"></script>
 </head>
 
 <body>
   <div id="ui">
     <div class="row">
-      <div class="title">MuJoCo WASM Piano (MIDI)</div>
+      <div class="title">MuJoCo WASM MIDI Piano 自動演奏</div>
       <div id="status" class="status">Loading…</div>
     </div>
 
@@ -43,13 +43,23 @@
       </label>
 
       <label class="chk">
-        <input id="useSoundfont" type="checkbox" />
-        SoundFontピアノ（重め）
+        <input id="loop" type="checkbox" checked />
+        Loop
+      </label>
+
+      <label class="chk">
+        <input id="clickPlay" type="checkbox" checked />
+        クリック演奏
+      </label>
+
+      <label class="chk">
+        <input id="useSoundfont" type="checkbox" checked />
+        SoundFontピアノ
       </label>
     </div>
 
     <div class="row hint">
-      ※ まずは適当な .mid を読み込んで Play。音と鍵盤が一致するはず。
+      ・クリック演奏: 鍵盤をクリック/ドラッグで弾けます（離すとOFF）<br/>
     </div>
   </div>
 

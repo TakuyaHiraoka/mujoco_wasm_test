@@ -66,10 +66,10 @@ function buildKeyInfos() {
     if (black) x = (whiteIndex - 0.5) * whitePitch;
     else { x = whiteIndex * whitePitch; whiteIndex += 1; }
 
-    // ★追加：黒鍵を奥（+y）にずらす
+    // 黒鍵を奥（+y）にずらす
     const y = black ? 0.060 : 0.000;
 
-    // ★改善：白鍵はベース上面に乗るように、黒鍵はさらに少し高く
+    // 白鍵はベース上面に乗るように、黒鍵はさらに少し高く
     const pivotZ = black ? 0.040 : 0.030;
 
     infos.push({
