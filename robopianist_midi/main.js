@@ -223,7 +223,9 @@ scene.add(group);
 }
 
 // name2id の enum
-const OBJ_BODY = mujoco.mjtObj.mjOBJ_BODY;
+//const OBJ_BODY = mujoco.mjtObj.mjOBJ_BODY;
+const MJOBJ_BODY = 1; // mjOBJ_UNKNOWN=0, mjOBJ_BODY=1 :contentReference[oaicite:1]{index=1}
+
 
 for (let i = 0; i < N_KEYS; i++) {
   const k = keyInfos[i];
@@ -234,7 +236,8 @@ for (let i = 0; i < N_KEYS; i++) {
   keyMeshes[i] = mesh;
 
   const bodyName = `key_${i}`;
-  const bodyId = mujoco.mj_name2id(model, OBJ_BODY, bodyName);
+  //const bodyId = mujoco.mj_name2id(model, OBJ_BODY, bodyName);
+  const bodyId = mujoco.mj_name2id(model, MJOBJ_BODY, bodyName); // type は int :contentReference[oaicite:2]{index=2}
   if (bodyId < 0) {
     throw new Error(`Body not found: ${bodyName}`);
   }
