@@ -24,7 +24,7 @@ const KEY_HINGE_Y = KEYBOARD_DEPTH - 0.02; // 支点を奥へ（0.22）
 
 
 // ここを変えると “デフォルト曲” を変えられます
-const DEFAULT_MIDI_URL = "./midis/default.mid";
+const DEFAULT_MIDI_URL = "./midis/IRIS_OUT.mid";
 
 // --------------------
 // Three.js
