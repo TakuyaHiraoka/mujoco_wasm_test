@@ -19,12 +19,13 @@ const UI = {
 const FIRST_MIDI = 21; // A0
 const N_KEYS = 88;
 
-const KEYBOARD_DEPTH = 0.24;          // mjcfPiano の baseL と合わせる
-const KEY_HINGE_Y = KEYBOARD_DEPTH - 0.02; // 支点を奥へ（0.22）
+const KEYBOARD_DEPTH = 0.24;                 // match mjcfPiano baseL
+const KEY_HINGE_Y = KEYBOARD_DEPTH - 0.02;   // move hinge toward the back (0.22)
 
 
-// ここを変えると “デフォルト曲” を変えられます
-const DEFAULT_MIDI_URL = "./midis/IRIS_OUT.mid";
+
+// Change this to set the default MIDI
+const DEFAULT_MIDI_URL = "./midis/Merry Christmas, Mr. Lawrence.mid";
 
 // --------------------
 // Three.js
@@ -72,17 +73,17 @@ function buildKeyInfos() {
 
     infos.push({
       midi, black, x,
-      // 支点は全キー共通で奥側
+      // All keys share the same pivot on the back side
       pivotY: KEY_HINGE_Y,
 
       width:  black ? 0.014 : 0.022,
       length: black ? 0.090 : 0.140,
       height: 0.020,
 
-      // 黒鍵は少し高く
+      // Black keys are slightly higher
       pivotZ: black ? 0.040 : 0.030,
 
-      // キーが手前へ伸びるので、押下角は正にする
+      // Keys extend toward the front, so the press angle should be positive
       pressAngle: black ? 0.10 : 0.12
     });
   }
@@ -192,7 +193,7 @@ for (let gi = 0; gi < ngeom; gi++) {
   scene.add(mesh);
 }
 
-// キーのクリック対象メッシュ（base=0, keys=1..88 を前提）
+// Meshes used for key clicking (assumes base=0, keys=1..88)
 const keyClickMeshes = [];
 for (let i = 0; i < N_KEYS; i++) {
   const m = meshes[1 + i];
@@ -261,7 +262,7 @@ let sfInstrument = null;
 async function ensureSoundfontPiano() {
   const ac = ensureAudioCtx();
   const Soundfont = globalThis.Soundfont;
-  if (!Soundfont) throw new Error("soundfont-player が読み込まれていません");
+  if (!Soundfont) throw new Error("soundfont-player is not loaded");
 
   UI.status.textContent = "Loading SoundFont piano…";
   sfInstrument = await Soundfont.instrument(ac, "acoustic_grand_piano", { soundfont: "FluidR3_GM" });
@@ -272,10 +273,10 @@ async function ensureSoundfontPiano() {
 function noteOnAudio(keyIndex, velocity) {
   const ac = ensureAudioCtx();
 
-  // gestureが無いと鳴らないことがあるので、可能なら resume（失敗しても無視）
+  // gSome browsers require a user gesture to start audio; try resuming if possible (ignore failures)
   if (ac.state === "suspended") ac.resume().catch(()=>{});
 
-  // SoundFontがONなら、準備できてる時だけ使う（未ロードなら裏でロード開始しつつ一旦synth）
+  //  If SoundFont is enabled, use it only when ready (if not loaded, start loading in the background and fall back to synth)
   if (UI.useSoundfont.checked) {
     if (!sfInstrument) ensureSoundfontPiano().catch(()=>{});
     if (sfInstrument) {
@@ -338,12 +339,12 @@ let playing = false;
 let songTime = 0;
 let eventIdx = 0;
 
-// MIDI由来 / クリック由来を分ける（混ざっても壊れない）
+// Separate MIDI-driven and click-driven states (safe even if they overlap)
 const midiCounts = new Int16Array(N_KEYS);
 const manualCounts = new Int16Array(N_KEYS);
 const noteCounts = new Int16Array(N_KEYS);
 
-// 見た目
+// Visual state
 const keyAngles = new Float32Array(N_KEYS);
 const KEY_RESP = 70;
 
@@ -358,7 +359,6 @@ function recomputeKey(i, velocityHint = 0.8) {
 
 function recomputeAll() {
   for (let i = 0; i < N_KEYS; i++) {
-    // velocityHint は適当
     recomputeKey(i, 0.8);
   }
 }
@@ -375,7 +375,7 @@ function restartSong(keepPlaying) {
   stopAllAudio();
   updateKeyMaterials(noteCounts);
 
-  // qpos/qvelを初期化（鍵盤角度ゼロ）
+  // Reset qpos/qvel (zero key angles)
   for (let i = 0; i < N_KEYS; i++) {
     data.qpos[i] = 0;
     data.qvel[i] = 0;
@@ -398,7 +398,7 @@ UI.playPause.addEventListener("click", async () => {
   const ac = ensureAudioCtx();
   if (ac.state === "suspended") await ac.resume();
 
-  // SoundFont ONなら初回ロード
+  // If SoundFont is enabled, load it on first use
   if (UI.useSoundfont.checked && !sfInstrument) {
     try { await ensureSoundfontPiano(); } catch (e) { console.error(e); }
   }
@@ -456,10 +456,11 @@ async function tryLoadDefaultMidi() {
     const buf = await res.arrayBuffer();
     const midi = new Midi(buf);
     events = buildEventsFromMidi(midi);
-    songName = "default.mid";
+    //songName = "default.mid";
+    songName = decodeURIComponent(new URL(DEFAULT_MIDI_URL, location.href).pathname.split("/").pop() || "default.mid");
     UI.status.textContent = `Loaded default: ${songName} / events=${events.length}`;
   } catch {
-    // 無ければデモ
+    // If missing, fall back to the demo
     loadDemoScale();
     UI.status.textContent = `Ready (${songName})`;
   }
@@ -505,7 +506,6 @@ canvas.addEventListener("pointerdown", (ev) => {
   setManualKey(i, true, 0.9);
   updateKeyMaterials(noteCounts);
 
-  // pointer capture でドラッグしても追える
   canvas.setPointerCapture?.(ev.pointerId);
 });
 
@@ -516,7 +516,7 @@ canvas.addEventListener("pointermove", (ev) => {
   const i = pickKeyFromPointer(ev);
   if (i == null || i === heldKey) return;
 
-  // 押し替え（ドラッグ演奏）
+  //  Swap held key (drag play)
   setManualKey(heldKey, false);
   heldKey = i;
   setManualKey(heldKey, true, 0.9);
@@ -592,7 +592,7 @@ function animate() {
       recomputeKey(i, ev.velocity ?? 0.8);
     }
 
-    // 見た目：角度を追従
+    // Visuals: follow target angles
     const alpha = 1 - Math.exp(-KEY_RESP * realDt);
     for (let i = 0; i < N_KEYS; i++) {
       const target = noteCounts[i] > 0 ? keyInfos[i].pressAngle : 0;
@@ -603,10 +603,10 @@ function animate() {
     mujoco.mj_forward(model, data);
     updateKeyMaterials(noteCounts);
 
-    // 曲終端
+    // End of song
     if (eventIdx >= events.length) {
       if (UI.loop.checked) {
-        restartSong(true); // ← 自動繰り返し
+        restartSong(true); // ← Auto-loop
       } else {
         playing = false;
         UI.playPause.textContent = "▶︎ Play";

@@ -1,7 +1,7 @@
 ## MIDI Autoplaying Piano
 
 - **Demo**:  
-  https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/piano_midi_dev/
+  https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/piano_midi/
 
 - **Default MIDI source**:  
   The default MIDI file used in this application is sourced from the following website:  
