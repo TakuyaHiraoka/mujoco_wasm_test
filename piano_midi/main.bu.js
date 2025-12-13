@@ -423,12 +423,8 @@ UI.midiFile.addEventListener("change", async (e) => {
     events = buildEventsFromMidi(midi);
     songName = file.name;
     UI.status.textContent = `Loaded: ${songName} / events=${events.length}`;
-    // If SoundFont is enabled, wait for it to load before auto-playing
-    if (UI.useSoundfont.checked && !sfInstrument) {
-      try { await ensureSoundfontPiano(); } catch (e) { console.error(e); }
-    }
+    // Autoplay immediately after loading a MIDI file
     restartSong(true);
-
   } catch (err) {
     console.error(err);
     UI.status.textContent = `MIDI parse error: ${err?.message ?? err}`;
@@ -469,12 +465,8 @@ async function tryLoadDefaultMidi() {
     loadDemoScale();
     UI.status.textContent = `Ready (${songName})`;
   }
-  // If SoundFont is enabled, wait for it to load before auto-playing
-  if (UI.useSoundfont.checked && !sfInstrument) {
-    try { await ensureSoundfontPiano(); } catch (e) { console.error(e); }
-  }
+  // Autoplay from the beginning on page load
   restartSong(true);
-
 }
 
 await tryLoadDefaultMidi();
