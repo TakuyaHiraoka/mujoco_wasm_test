@@ -237,7 +237,7 @@ body::after{
 
 /* Hint */
 .hint{
-  font-size:16px;
+  font-size:17px;
   line-height:1.45;
   color:var(--muted);
 }
