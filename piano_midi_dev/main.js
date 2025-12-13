@@ -425,7 +425,7 @@ UI.midiFile.addEventListener("change", async (e) => {
     events = buildEventsFromMidi(midi);
     songName = file.name;
     UI.status.textContent = `Loaded: ${songName} / events=${events.length}`;
-    restartSong(True);
+    //restartSong(True);
   } catch (err) {
     console.error(err);
     UI.status.textContent = `MIDI parse error: ${err?.message ?? err}`;
