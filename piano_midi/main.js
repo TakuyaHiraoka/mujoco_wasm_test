@@ -31,11 +31,14 @@ const DEFAULT_MIDI_URL = "./midis/Merry Christmas, Mr. Lawrence.mid";
 // Three.js
 // --------------------
 const canvas = document.getElementById("c");
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+//const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x000000, 0);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x111111);
+// scene.background = new THREE.Color(0x111111);
+scene.background = null
 
 const camera = new THREE.PerspectiveCamera(45, 1, 0.01, 100);
 camera.position.set(0.0, -1.3, 0.55);
