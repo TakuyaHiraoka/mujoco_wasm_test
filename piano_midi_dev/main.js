@@ -384,7 +384,7 @@ function restartSong(keepPlaying) {
 
   playing = !!keepPlaying;
   UI.playPause.textContent = playing ? "⏸ Pause" : "▶︎ Play";
-  UI.playPause.setAttribute("aria-pressed", String(playing));
+  #UI.playPause.setAttribute("aria-pressed", String(playing));
   UI.status.textContent = `Ready (${songName})`;
 }
 
@@ -406,7 +406,7 @@ UI.playPause.addEventListener("click", async () => {
 
   playing = !playing;
   UI.playPause.textContent = playing ? "⏸ Pause" : "▶︎ Play";
-  UI.playPause.setAttribute("aria-pressed", String(playing));
+  #UI.playPause.setAttribute("aria-pressed", String(playing));
   if (!playing) stopAllAudio();
 });
 

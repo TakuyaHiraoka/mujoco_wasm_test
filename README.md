@@ -5,6 +5,6 @@
 
 - **Default MIDI source**:  
   The default MIDI file used in this application is sourced from the following website:  
-  - https://purepurepiano.main.jp/midi/iyashi/senmeri.html
+  - https://purepurepiano.main.jp/midi/iyashi/senmeri.htm
 
 
