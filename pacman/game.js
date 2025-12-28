@@ -519,7 +519,14 @@ async function main() {
     return !walls[n.rowTop][n.col];
   }
 
+
   function snapBodyToCenterIfClose(bodyXIdx, bodyYIdx) {
+    // Don't snap while moving fast; otherwise the character gets "stuck"
+    // because each simulation step moves less than SNAP_EPS.
+    const vx = data.qvel[bodyXIdx];
+    const vy = data.qvel[bodyYIdx];
+    if (Math.hypot(vx, vy) > 0.5) return;
+
     const x = data.qpos[bodyXIdx];
     const y = data.qpos[bodyYIdx];
     const cell = worldToCell(x, y, W, H);
@@ -533,6 +540,8 @@ async function main() {
       data.qvel[bodyYIdx] = 0;
     }
   }
+
+
 
   function updatePacmanControls() {
     const x = data.qpos[PAC_X];
