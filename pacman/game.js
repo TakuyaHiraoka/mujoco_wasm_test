@@ -482,7 +482,7 @@ async function main() {
   // Keyboard controls
   window.addEventListener("keydown", (e) => {
     const k = e.key.toLowerCase();
-    # debugTH
+
     elStatus.textContent = `Key: ${k}`;
 
     if (k === "r") {
