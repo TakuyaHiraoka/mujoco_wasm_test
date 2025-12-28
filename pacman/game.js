@@ -49,8 +49,8 @@ async function loadMujocoFromGlobal() {
 // Game configuration
 // -----------------------------
 const CELL = 1.0;                 // Grid cell size in MuJoCo world units
-const PAC_SPEED = 4.0;            // Desired velocity in world units/sec
-const GHOST_SPEED = 3.2;          // Ghost speed
+const PAC_SPEED = 40.0;            // Desired velocity in world units/sec
+const GHOST_SPEED = 32.0;          // Ghost speed
 const SNAP_EPS = 0.10;            // How close to a cell center to allow turning/snapping
 const AI_UPDATE_SEC = 0.25;       // Ghost path update interval
 const SIM_TIMESTEP = 0.01;        // MuJoCo timestep set in MJCF
@@ -294,11 +294,11 @@ function buildMJCF({ walls, W, H }) {
   </worldbody>
 
   <actuator>
-    <!-- Velocity servos: ctrl is the desired joint velocity. -->
-    <velocity joint="pacman_x" kv="25" ctrlrange="-${PAC_SPEED} ${PAC_SPEED}" />
-    <velocity joint="pacman_y" kv="25" ctrlrange="-${PAC_SPEED} ${PAC_SPEED}" />
-    <velocity joint="ghost_x"  kv="18" ctrlrange="-${GHOST_SPEED} ${GHOST_SPEED}" />
-    <velocity joint="ghost_y"  kv="18" ctrlrange="-${GHOST_SPEED} ${GHOST_SPEED}" />
+    <!-- Replace velocity actuators with motors (force-based) -->
+    <motor name="pacman_x_motor" joint="pacman_x" gear="1 0 0 0 0 0" ctrlrange="-${PAC_SPEED} ${PAC_SPEED}" />
+    <motor name="pacman_y_motor" joint="pacman_y" gear="0 1 0 0 0 0" ctrlrange="-${PAC_SPEED} ${PAC_SPEED}" />
+    <motor name="ghost_x_motor"  joint="ghost_x"  gear="1 0 0 0 0 0" ctrlrange="-${GHOST_SPEED} ${GHOST_SPEED}" />
+    <motor name="ghost_y_motor"  joint="ghost_y"  gear="0 1 0 0 0 0" ctrlrange="-${GHOST_SPEED} ${GHOST_SPEED}" />
   </actuator>
 </mujoco>`;
 }
