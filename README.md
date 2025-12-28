@@ -8,3 +8,8 @@
   - https://purepurepiano.main.jp/midi/iyashi/senmeri.htm
 
 
+
+## Pacman
+
+- **Demo**:  
+  https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/pacman/
