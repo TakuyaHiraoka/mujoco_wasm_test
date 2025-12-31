@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MuJoCo WASM Drawing Arm</title>
+    <link rel="stylesheet" href="./style.css" />
+
+    <!--
+      three.js をブラウザのネイティブESMで読み込むための importmap。
+      バージョン固定で GitHub Pages 上でも再現性が高い構成にしています。
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+
+  <body>
+    <header class="topbar">
+      <div class="title">MuJoCo WASM Drawing Arm</div>
+
+      <div class="controls">
+        <button id="btnClear" title="ターゲット/実行結果を消去">Clear</button>
+        <button id="btnHome" title="ホーム姿勢に戻す">Home</button>
+
+        <label class="toggle" title="描いている間に即追従する（ON） / 描き終わってから追従する（OFF）">
+          <input type="checkbox" id="chkFollow" checked />
+          <span>Follow while drawing</span>
+        </label>
+
+        <label class="toggle" title="入力(ターゲット)軌道を表示">
+          <input type="checkbox" id="chkShowTarget" checked />
+          <span>Show target</span>
+        </label>
+
+        <label class="toggle" title="ロボットが実際に描いた軌道を表示">
+          <input type="checkbox" id="chkShowExec" checked />
+          <span>Show executed</span>
+        </label>
+
+        <span id="status" class="status">loading…</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel">
+        <div class="panel-title">MuJoCo 3D View</div>
+        <canvas id="simCanvas"></canvas>
+        <div class="hint">左ドラッグ: 回転 / ホイール: ズーム / 右ドラッグ: 平行移動</div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-title">Drawing Canvas (input)</div>
+        <canvas id="drawCanvas"></canvas>
+        <div class="hint">右のキャンバスにマウス/タッチで描くと、アームがIKで追従して描画します。</div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>
+        MuJoCo in browser via <code>mujoco-js</code> and rendering with <code>three.js</code>.
+      </span>
+    </footer>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

@@ -13,3 +13,7 @@
 
 - **Demo**:  
   https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/pacman/
+
+
+# MuJoCo WASM Drawing Arm
+  https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/mujoco-draw-arm/
