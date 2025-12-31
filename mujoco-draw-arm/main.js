@@ -366,8 +366,15 @@ function updateThreeTransformsFromData() {
       m21 = gxmat[r + 7],
       m22 = gxmat[r + 8];
 
-    // THREE.Matrix4.set は row-major 引数
-    mesh.matrix.set(m00, m01, m02, 0, m10, m11, m12, 0, m20, m21, m22, 0, px, py, pz, 1);
+    // THREE.Matrix4.set は「引数は行優先 (row-major)」で指定する。
+    // 同次変換の並びは以下:
+    // [ R00 R01 R02 Tx ]
+    // [ R10 R11 R12 Ty ]
+    // [ R20 R21 R22 Tz ]
+    // [  0   0   0  1 ]
+    // ※ 以前ここで Tx,Ty,Tz を最下段に入れてしまっていたため、
+    //   位置が反映されず「赤/緑のバーが原点付近でカクカクするだけ」になっていました。
+    mesh.matrix.set(m00, m01, m02, px, m10, m11, m12, py, m20, m21, m22, pz, 0, 0, 0, 1);
     mesh.matrixWorldNeedsUpdate = true;
   }
 }
