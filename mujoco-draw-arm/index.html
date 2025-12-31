@@ -3,12 +3,12 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>MuJoCo WASM Drawing Arm</title>
+    <title>MuJoCo WASM Drawing Arm (Kinematic + 3D Ink)</title>
     <link rel="stylesheet" href="./style.css" />
 
     <!--
-      three.js をブラウザのネイティブESMで読み込むための importmap。
-      バージョン固定で GitHub Pages 上でも再現性が高い構成にしています。
+      three.js をブラウザのネイティブ ESM で読み込む importmap。
+      ビルド不要で GitHub Pages 上でも動かせる構成です。
     -->
     <script type="importmap">
       {
@@ -27,16 +27,6 @@
       <div class="controls">
         <button id="btnClear" title="ターゲット/実行結果を消去">Clear</button>
         <button id="btnHome" title="ホーム姿勢に戻す">Home</button>
-        <button id="btnReset" title="シミュレーション状態をホームにリセット（キューはクリア）">Reset</button>
-        <button id="btnRunTests" title="セルフテストを実行（座標変換/IK/サイト参照など）">Run tests</button>
-
-        <label class="select" title="制御方式。Dynamics は環境によって不安定になることがあります。">
-          <span>Control</span>
-          <select id="selControlMode">
-            <option value="kinematic" selected>Kinematic (stable)</option>
-            <option value="dynamic">Dynamics (actuators)</option>
-          </select>
-        </label>
 
         <label class="toggle" title="描いている間に即追従する（ON） / 描き終わってから追従する（OFF）">
           <input type="checkbox" id="chkFollow" checked />
@@ -51,6 +41,11 @@
         <label class="toggle" title="ロボットが実際に描いた軌道を表示">
           <input type="checkbox" id="chkShowExec" checked />
           <span>Show executed</span>
+        </label>
+
+        <label class="toggle" title="3Dビューにインク（点群）を表示">
+          <input type="checkbox" id="chkShowInk3D" checked />
+          <span>3D ink</span>
         </label>
 
         <span id="status" class="status">loading…</span>
@@ -73,29 +68,10 @@
 
     <footer class="footer">
       <span>
-        MuJoCo in browser via <code>mujoco-js</code> and rendering with <code>three.js</code>.
+        Kinematic control (no dynamics) + 3D ink dots.
       </span>
     </footer>
 
-
-<!-- Self-test / debug drawer -->
-<div id="testDrawer" class="testDrawer hidden" aria-hidden="true">
-  <div class="testHeader">
-    <div class="testTitle">Self tests</div>
-    <button id="btnCloseTests" class="testClose" title="閉じる">×</button>
-  </div>
-  <div class="testControls">
-    <button id="btnRunBasicTests" title="非侵襲（座標変換/IK/サイト参照など）">Run basic</button>
-    <button id="btnRunFullTests" title="一時的に姿勢/ctrl/キューを変更して検査（終了後に復元）">Run full</button>
-    <button id="btnCopyTestLog" title="ログをクリップボードにコピー">Copy log</button>
-  </div>
-  <pre id="testOutput" class="testOutput"></pre>
-  <div class="testHint">
-    URLに <code>?selftest=basic</code> または <code>?selftest=full</code> を付けると自動実行します。
-  </div>
-</div>
-
     <script type="module" src="./main.js"></script>
-    <script type="module" src="./tests.js"></script>
   </body>
 </html>
