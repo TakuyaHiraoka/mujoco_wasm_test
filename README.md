@@ -15,6 +15,7 @@
   https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/pacman/
 
 
-# MuJoCo WASM Drawing Arm
+## MuJoCo WASM Drawing Arm
+
 - **Demo**:  
   https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/mujoco-draw-arm/
