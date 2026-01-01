@@ -19,3 +19,6 @@
 
 - **Demo**:  
   https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/mujoco-draw-arm/
+- **Video (Draemon-ekakiuta): 
+  https://drive.google.com/file/d/1y8FW6fOYE7B-ekIlk1e1Q3UbIb7sUvVH/view?usp=sharing
+
