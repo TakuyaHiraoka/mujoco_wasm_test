@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>MuJoCo WASM 3D 知恵の輪ジェネレータ</title>
-  <meta name="description" content="ランダム生成された3Dワイヤー知恵の輪風パズルを、MuJoCo WASM でブラウザ上で遊べる静的サイトです。" />
+  <title>MuJoCo WASM 位相ベース 3D 知恵の輪ジェネレータ</title>
+  <meta name="description" content="Gap / Loop の intrinsic representation から 3D ワイヤー知恵の輪を生成し、MuJoCo WASM でブラウザ上に表示する静的サイトです。" />
   <link rel="stylesheet" href="./style.css" />
   <script type="importmap">
   {
@@ -20,8 +20,8 @@
     <aside id="hudPanel">
       <div class="panel-header">
         <div>
-          <h1>MuJoCo WASM 3D 知恵の輪</h1>
-          <p class="sub">ランダム生成されたワイヤー脱出パズルを解く</p>
+          <h1>位相ベース 3D 知恵の輪</h1>
+          <p class="sub">Loop / Gap の内在表現から alpha 系のワイヤー知恵の輪を生成</p>
         </div>
         <div id="statusBadge" class="badge loading">Loading MuJoCo…</div>
       </div>
@@ -45,27 +45,35 @@
         </label>
 
         <div class="button-row">
-          <button id="generateBtn" class="btn primary" type="button">新しいパズルを生成</button>
+          <button id="generateBtn" class="btn primary" type="button">新しい知恵の輪を生成</button>
           <button id="resetBtn" class="btn secondary" type="button">初期位置へ戻す</button>
         </div>
       </section>
 
       <section class="panel-section stats-grid">
         <div class="stat-card">
-          <span class="stat-label">曲がり角</span>
-          <strong id="turnCount">-</strong>
+          <span class="stat-label">family</span>
+          <strong id="familyValue">-</strong>
         </div>
         <div class="stat-card">
-          <span class="stat-label">ゲート数</span>
-          <strong id="gateCount">-</strong>
+          <span class="stat-label">gap / 線径比</span>
+          <strong id="gapRatioValue">-</strong>
         </div>
         <div class="stat-card">
-          <span class="stat-label">ワイヤー長</span>
-          <strong id="wireLength">-</strong>
+          <span class="stat-label">推定難度</span>
+          <strong id="difficultyValue">-</strong>
         </div>
         <div class="stat-card">
-          <span class="stat-label">進捗</span>
-          <strong id="progressValue">0%</strong>
+          <span class="stat-label">総ワイヤー長</span>
+          <strong id="wireLengthValue">-</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">分離度</span>
+          <strong id="separationValue">0%</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">接触数</span>
+          <strong id="contactValue">0</strong>
         </div>
       </section>
 
@@ -84,38 +92,44 @@
           <strong id="modeValue">未開始</strong>
         </div>
         <div class="toggle-list">
-          <label class="toggle"><input id="guideToggle" type="checkbox" checked /> ガイドライン表示</label>
+          <label class="toggle"><input id="debugToggle" type="checkbox" checked /> 診断マーカー表示</label>
           <label class="toggle"><input id="followToggle" type="checkbox" checked /> カメラ追従</label>
           <label class="toggle"><input id="turboHintToggle" type="checkbox" checked /> Shift で加速</label>
         </div>
         <div class="button-row">
           <button id="pauseBtn" class="btn secondary" type="button">一時停止</button>
-          <button id="shareBtn" class="btn secondary" type="button">URL をコピー</button>
+          <button id="copyUrlBtn" class="btn secondary" type="button">URL をコピー</button>
         </div>
-      </section>
-
-      <section class="panel-section diagnostics-box">
-        <div class="section-title">診断</div>
-        <div class="button-row">
-          <button id="selfTestBtn" class="btn secondary" type="button">自己診断</button>
-          <button id="downloadMjcfBtn" class="btn secondary" type="button">現在の MJCF を保存</button>
-        </div>
-        <div class="inline-meta">
-          <span>診断結果</span>
-          <strong id="diagnosticSummary">未実行</strong>
-        </div>
-        <details class="diagnostic-details">
-          <summary>詳細ログ</summary>
-          <pre id="diagnosticLog" class="diagnostic-log">まだ診断は実行されていません。</pre>
-        </details>
       </section>
 
       <section class="panel-section objective-box">
         <div class="section-title">目的</div>
         <p>
-          青いリングをワイヤーに沿って進め、すべてのゲートを抜けて右端の出口から外してください。
-          キー操作で <strong>平行移動 + 回転</strong> を加えられます。
+          シアン色の可動片を銀色の固定片から分離してください。
+          パズルは <strong>gap align → twist → slide</strong> の手順を持つ alpha 系の機構として生成されます。
         </p>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-title">診断 / デバッグ</div>
+        <div class="button-row tight">
+          <button id="runDiagBtn" class="btn secondary" type="button">診断を再計算</button>
+          <button id="downloadDiagBtn" class="btn secondary" type="button">診断 JSON</button>
+          <button id="downloadSpecBtn" class="btn secondary" type="button">spec JSON</button>
+          <button id="downloadMjcfBtn" class="btn secondary" type="button">MJCF XML</button>
+          <button id="copyLogBtn" class="btn secondary" type="button">ログをコピー</button>
+        </div>
+
+        <div class="diag-grid">
+          <div>
+            <div class="mini-title">静的診断</div>
+            <pre id="staticDiagText" class="mono-box">-</pre>
+          </div>
+          <div>
+            <div class="mini-title">実行時診断</div>
+            <pre id="runtimeDiagText" class="mono-box">-</pre>
+          </div>
+        </div>
       </section>
 
       <details class="panel-section help-box" open>
@@ -143,10 +157,15 @@
             <h3>その他</h3>
             <p><kbd>Space</kbd>：一時停止 / 再開</p>
             <p><kbd>Backspace</kbd>：リセット</p>
-            <p><kbd>G</kbd>：ガイド表示切替</p>
+            <p><kbd>M</kbd>：診断マーカー切替</p>
           </div>
         </div>
       </details>
+
+      <section class="panel-section">
+        <div class="section-title">イベントログ</div>
+        <pre id="logText" class="log-box">起動待ち…</pre>
+      </section>
 
     </aside>
 

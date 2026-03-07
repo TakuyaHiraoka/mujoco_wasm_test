@@ -1,7 +1,17 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import loadMujoco from 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js';
 import { buildPuzzleMjcf, generatePuzzleSpec } from './puzzle-generator.js';
-import { clamp, polylineProgress } from './math.js';
+import {
+  buildDiagnosticsBundle,
+  buildRuntimeDiagnostics,
+  computePoseGeometry,
+  downloadText,
+  formatRuntimeDiagnostics,
+  formatStaticDiagnostics,
+  runStaticDiagnostics,
+} from './diagnostics.js';
+import { clamp } from './math.js';
 
 const UI = {
   canvasWrap: document.getElementById('canvasWrap'),
@@ -13,93 +23,55 @@ const UI = {
   generateBtn: document.getElementById('generateBtn'),
   resetBtn: document.getElementById('resetBtn'),
   pauseBtn: document.getElementById('pauseBtn'),
-  shareBtn: document.getElementById('shareBtn'),
-  selfTestBtn: document.getElementById('selfTestBtn'),
-  downloadMjcfBtn: document.getElementById('downloadMjcfBtn'),
-  guideToggle: document.getElementById('guideToggle'),
+  copyUrlBtn: document.getElementById('copyUrlBtn'),
+  debugToggle: document.getElementById('debugToggle'),
   followToggle: document.getElementById('followToggle'),
   turboHintToggle: document.getElementById('turboHintToggle'),
-  turnCount: document.getElementById('turnCount'),
-  gateCount: document.getElementById('gateCount'),
-  wireLength: document.getElementById('wireLength'),
-  progressValue: document.getElementById('progressValue'),
+  familyValue: document.getElementById('familyValue'),
+  gapRatioValue: document.getElementById('gapRatioValue'),
+  difficultyValue: document.getElementById('difficultyValue'),
+  wireLengthValue: document.getElementById('wireLengthValue'),
+  separationValue: document.getElementById('separationValue'),
+  contactValue: document.getElementById('contactValue'),
   timerValue: document.getElementById('timerValue'),
   seedEcho: document.getElementById('seedEcho'),
   modeValue: document.getElementById('modeValue'),
-  diagnosticSummary: document.getElementById('diagnosticSummary'),
-  diagnosticLog: document.getElementById('diagnosticLog'),
+  staticDiagText: document.getElementById('staticDiagText'),
+  runtimeDiagText: document.getElementById('runtimeDiagText'),
+  logText: document.getElementById('logText'),
+  runDiagBtn: document.getElementById('runDiagBtn'),
+  downloadDiagBtn: document.getElementById('downloadDiagBtn'),
+  downloadSpecBtn: document.getElementById('downloadSpecBtn'),
+  downloadMjcfBtn: document.getElementById('downloadMjcfBtn'),
+  copyLogBtn: document.getElementById('copyLogBtn'),
   overlayMessage: document.getElementById('overlayMessage'),
 };
-
-const MUJOCO_CDN_CANDIDATES = [
-  {
-    name: 'jsDelivr',
-    moduleUrl: 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js',
-    wasmBase: 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/',
-  },
-  {
-    name: 'unpkg',
-    moduleUrl: 'https://unpkg.com/mujoco-js@0.0.7/dist/mujoco_wasm.js',
-    wasmBase: 'https://unpkg.com/mujoco-js@0.0.7/dist/',
-  },
-];
-
-function timeoutAfter(ms, message) {
-  return new Promise((_, reject) => {
-    window.setTimeout(() => {
-      reject(new Error(message));
-    }, ms);
-  });
-}
-
-async function importMujocoFactory(candidate) {
-  const mod = await Promise.race([
-    import(candidate.moduleUrl),
-    timeoutAfter(15000, `${candidate.name}: JavaScript module import timed out`),
-  ]);
-  return mod?.default ?? mod;
-}
-
-async function loadMujocoWithFallback(log = () => {}) {
-  const errors = [];
-  for (const candidate of MUJOCO_CDN_CANDIDATES) {
-    try {
-      log(`[bootstrap] trying ${candidate.name}`);
-      const factory = await importMujocoFactory(candidate);
-      if (typeof factory !== 'function') {
-        throw new Error('default export is not a loader function');
-      }
-      log(`[bootstrap] imported ${candidate.name} module`);
-      const mujoco = await Promise.race([
-        factory({ locateFile: (path) => `${candidate.wasmBase}${path}` }),
-        timeoutAfter(20000, `${candidate.name}: WASM initialization timed out`),
-      ]);
-      log(`[bootstrap] ready via ${candidate.name}`);
-      return { mujoco, candidate };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      log(`[bootstrap] failed ${candidate.name}: ${message}`);
-      errors.push(`${candidate.name}: ${message}`);
-    }
-  }
-  throw new Error(`MuJoCo bootstrap failed.
-${errors.join('\n')}`);
-}
 
 class CapsuleGeometry extends THREE.BufferGeometry {
   constructor(radius = 1, length = 1, capSegments = 8, radialSegments = 16) {
     const path = new THREE.Path();
     path.absarc(0, -length / 2, radius, Math.PI * 1.5, 0, false);
     path.absarc(0, length / 2, radius, 0, Math.PI * 0.5, false);
-    const latheGeometry = new THREE.LatheGeometry(path.getPoints(capSegments), radialSegments);
+    const lathe = new THREE.LatheGeometry(path.getPoints(capSegments), radialSegments);
     super();
-    this.setIndex(latheGeometry.getIndex());
-    this.setAttribute('position', latheGeometry.getAttribute('position'));
-    this.setAttribute('normal', latheGeometry.getAttribute('normal'));
-    this.setAttribute('uv', latheGeometry.getAttribute('uv'));
+    this.setIndex(lathe.getIndex());
+    this.setAttribute('position', lathe.getAttribute('position'));
+    this.setAttribute('normal', lathe.getAttribute('normal'));
+    this.setAttribute('uv', lathe.getAttribute('uv'));
     this.type = 'CapsuleGeometry';
-    this.parameters = { radius, length, capSegments, radialSegments };
   }
+}
+
+function setLinePositions(line, a, b) {
+  const array = line.geometry.attributes.position.array;
+  array[0] = a.x;
+  array[1] = a.y;
+  array[2] = a.z;
+  array[3] = b.x;
+  array[4] = b.y;
+  array[5] = b.z;
+  line.geometry.attributes.position.needsUpdate = true;
+  line.geometry.computeBoundingSphere();
 }
 
 class MujocoThreeBridge {
@@ -117,7 +89,7 @@ class MujocoThreeBridge {
 
     this.camera = new THREE.PerspectiveCamera(48, 1, 0.01, 100);
     this.camera.up.set(0, 0, 1);
-    this.camera.position.set(-1.8, -3.3, 1.7);
+    this.camera.position.set(-1.9, -3.4, 1.9);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
@@ -125,24 +97,24 @@ class MujocoThreeBridge {
     this.controls.target.set(0, 0, 0);
 
     this.simGroup = new THREE.Group();
-    this.guideGroup = new THREE.Group();
+    this.debugGroup = new THREE.Group();
     this.scene.add(this.simGroup);
-    this.scene.add(this.guideGroup);
+    this.scene.add(this.debugGroup);
 
     this.meshes = [];
     this.geometryCache = new Map();
+    this.debugObjects = null;
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.55);
-    this.scene.add(ambient);
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.58));
 
-    const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    keyLight.position.set(2.2, -2.8, 4.8);
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.18);
+    keyLight.position.set(2.3, -2.8, 4.8);
     keyLight.castShadow = true;
     keyLight.shadow.mapSize.set(2048, 2048);
     this.scene.add(keyLight);
 
-    const rimLight = new THREE.PointLight(0x6fd4ff, 1.0, 14, 2);
-    rimLight.position.set(-2.5, 2.0, 2.5);
+    const rimLight = new THREE.PointLight(0x69d7ff, 1.0, 16, 2);
+    rimLight.position.set(-2.4, 2.2, 2.5);
     this.scene.add(rimLight);
 
     this.resize();
@@ -157,45 +129,6 @@ class MujocoThreeBridge {
     this.camera.updateProjectionMatrix();
   }
 
-  clearGuide() {
-    while (this.guideGroup.children.length > 0) {
-      const child = this.guideGroup.children[0];
-      this.guideGroup.remove(child);
-      if (child.geometry) child.geometry.dispose();
-      if (child.material) child.material.dispose();
-    }
-  }
-
-  setGuide(points) {
-    this.clearGuide();
-    const vectors = points.map((p) => new THREE.Vector3(p[0], p[1], p[2]));
-    const geometry = new THREE.BufferGeometry().setFromPoints(vectors);
-    const material = new THREE.LineDashedMaterial({ color: 0x63d7ff, dashSize: 0.08, gapSize: 0.05, transparent: true, opacity: 0.65 });
-    const line = new THREE.Line(geometry, material);
-    line.computeLineDistances();
-    this.guideGroup.add(line);
-  }
-
-  setGuideVisible(visible) {
-    this.guideGroup.visible = visible;
-  }
-
-  clearSimulationMeshes() {
-    this.meshes.forEach((mesh) => {
-      if (mesh.parent) mesh.parent.remove(mesh);
-      if (mesh.material) {
-        if (Array.isArray(mesh.material)) {
-          mesh.material.forEach((material) => material.dispose());
-        } else {
-          mesh.material.dispose();
-        }
-      }
-    });
-    this.meshes.length = 0;
-    this.geometryCache.forEach((geometry) => geometry.dispose());
-    this.geometryCache.clear();
-  }
-
   getGeometry(mujoco, mjvGeom) {
     const key = JSON.stringify([
       mjvGeom.type,
@@ -204,15 +137,12 @@ class MujocoThreeBridge {
     ]);
 
     if (this.geometryCache.has(key)) {
-      return { key, geometry: this.geometryCache.get(key) };
+      return this.geometryCache.get(key);
     }
 
     let geometry;
     if (mjvGeom.type === mujoco.mjtGeom.mjGEOM_PLANE.value) {
-      geometry = new THREE.PlaneGeometry(
-        2 * (mjvGeom.size[0] || 1000),
-        2 * (mjvGeom.size[1] || 1000),
-      );
+      geometry = new THREE.PlaneGeometry(2 * (mjvGeom.size[0] || 1000), 2 * (mjvGeom.size[1] || 1000));
       const uv = geometry.getAttribute('uv');
       for (let i = 0; i < uv.count; i += 1) {
         uv.setY(i, 1 - uv.getY(i));
@@ -232,7 +162,136 @@ class MujocoThreeBridge {
     }
 
     this.geometryCache.set(key, geometry);
-    return { key, geometry };
+    return geometry;
+  }
+
+  clearSimulationMeshes() {
+    this.meshes.forEach((mesh) => {
+      if (mesh.parent) mesh.parent.remove(mesh);
+      if (mesh.material) mesh.material.dispose();
+    });
+    this.meshes.length = 0;
+    this.geometryCache.forEach((geometry) => geometry.dispose());
+    this.geometryCache.clear();
+  }
+
+  clearDebug() {
+    while (this.debugGroup.children.length > 0) {
+      const child = this.debugGroup.children[0];
+      this.debugGroup.remove(child);
+      child.traverse?.((node) => {
+        if (node.geometry) node.geometry.dispose();
+        if (node.material) {
+          if (Array.isArray(node.material)) node.material.forEach((m) => m.dispose());
+          else node.material.dispose();
+        }
+      });
+    }
+    this.debugObjects = null;
+  }
+
+  setDebugVisible(visible) {
+    this.debugGroup.visible = visible;
+  }
+
+  setDebugMarkers(spec) {
+    this.clearDebug();
+    const lineGeometry = new THREE.BufferGeometry();
+    lineGeometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+
+    const fixedCenter = new THREE.Mesh(
+      new THREE.SphereGeometry(spec.wire.radius * 0.55, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0xf5f5f5 }),
+    );
+    fixedCenter.position.set(0, 0, 0);
+
+    const movingCenter = new THREE.Mesh(
+      new THREE.SphereGeometry(spec.wire.radius * 0.55, 16, 12),
+      new THREE.MeshBasicMaterial({ color: 0x3be4ff }),
+    );
+
+    const fixedGapLine = new THREE.Line(
+      lineGeometry.clone(),
+      new THREE.LineBasicMaterial({ color: 0xffb74d }),
+    );
+
+    const movingGapLine = new THREE.Line(
+      lineGeometry.clone(),
+      new THREE.LineBasicMaterial({ color: 0xff4fc9 }),
+    );
+
+    const centerLinkLine = new THREE.Line(
+      lineGeometry.clone(),
+      new THREE.LineDashedMaterial({ color: 0x8ff7b5, dashSize: 0.08, gapSize: 0.05, opacity: 0.72, transparent: true }),
+    );
+
+    const fixedArrow = new THREE.ArrowHelper(
+      new THREE.Vector3(0, 0, 1),
+      new THREE.Vector3(0, 0, 0),
+      spec.fixed.primaryLoopRadius * 0.34,
+      0x7ef6a8,
+      spec.wire.radius * 2.6,
+      spec.wire.radius * 1.6,
+    );
+
+    const movingArrow = new THREE.ArrowHelper(
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, 0, 0),
+      spec.moving.primaryLoopRadius * 0.34,
+      0x80d8ff,
+      spec.wire.radius * 2.6,
+      spec.wire.radius * 1.6,
+    );
+
+    setLinePositions(
+      fixedGapLine,
+      new THREE.Vector3(...spec.fixed.gap.aLocal),
+      new THREE.Vector3(...spec.fixed.gap.bLocal),
+    );
+
+    fixedArrow.position.set(0, 0, 0);
+    fixedArrow.setDirection(new THREE.Vector3(0, 0, 1));
+
+    this.debugGroup.add(fixedCenter, movingCenter, fixedGapLine, movingGapLine, centerLinkLine, fixedArrow, movingArrow);
+
+    this.debugObjects = {
+      fixedCenter,
+      movingCenter,
+      fixedGapLine,
+      movingGapLine,
+      centerLinkLine,
+      fixedArrow,
+      movingArrow,
+    };
+
+    this.updateMovingMarkers(spec, { pos: spec.startPose.pos, quat: spec.startPose.quat });
+  }
+
+  updateMovingMarkers(spec, pose) {
+    if (!this.debugObjects) return;
+    const markers = computePoseGeometry(spec, pose);
+
+    const fixedCenter = new THREE.Vector3(...markers.fixed.holeCenter);
+    const movingCenter = new THREE.Vector3(...markers.moving.holeCenter);
+
+    this.debugObjects.fixedCenter.position.copy(fixedCenter);
+    this.debugObjects.movingCenter.position.copy(movingCenter);
+    setLinePositions(this.debugObjects.centerLinkLine, fixedCenter, movingCenter);
+    this.debugObjects.centerLinkLine.computeLineDistances();
+
+    setLinePositions(
+      this.debugObjects.movingGapLine,
+      new THREE.Vector3(...markers.moving.gapA),
+      new THREE.Vector3(...markers.moving.gapB),
+    );
+
+    this.debugObjects.movingArrow.position.copy(movingCenter);
+    this.debugObjects.movingArrow.setDirection(new THREE.Vector3(...markers.moving.holeNormal).normalize());
+    this.debugObjects.movingArrow.setLength(
+      spec.moving.primaryLoopRadius * 0.34,
+      spec.wire.radius * 2.6,
+      spec.wire.radius * 1.6,
+    );
   }
 
   sync(mujoco, model, data, mjvScene, mjvOption, mjvPerturb, mjvCamera) {
@@ -253,9 +312,9 @@ class MujocoThreeBridge {
       const mjvGeom = geoms.get(i);
       if (!mjvGeom) continue;
 
-      const { key, geometry } = this.getGeometry(mujoco, mjvGeom);
+      const geometry = this.getGeometry(mujoco, mjvGeom);
       let mesh = this.meshes[i];
-      if (!mesh || mesh.userData.key !== key) {
+      if (!mesh || mesh.userData.geometry !== geometry) {
         if (mesh) {
           this.simGroup.remove(mesh);
           if (mesh.material) mesh.material.dispose();
@@ -269,7 +328,7 @@ class MujocoThreeBridge {
         mesh = new THREE.Mesh(geometry, material);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        mesh.userData.key = key;
+        mesh.userData.geometry = geometry;
         this.meshes[i] = mesh;
         this.simGroup.add(mesh);
       }
@@ -304,8 +363,8 @@ class MujocoThreeBridge {
   }
 
   dispose() {
-    this.clearGuide();
     this.clearSimulationMeshes();
+    this.clearDebug();
     this.controls.dispose();
     this.renderer.dispose();
   }
@@ -317,56 +376,6 @@ function formatTime(seconds) {
   const secs = whole % 60;
   const dec = Math.floor((seconds - whole) * 10);
   return `${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${dec}`;
-}
-
-function bodyQuaternionFromQpos(qpos) {
-  return new THREE.Quaternion(qpos[4], qpos[5], qpos[6], qpos[3]);
-}
-
-function safeErrorString(error) {
-  if (error instanceof Error) {
-    return `${error.name}: ${error.message}`;
-  }
-  return String(error);
-}
-
-function buildMinimalDiagnosticMjcf() {
-  return `
-<mujoco model="diagnostic_minimal">
-  <option gravity="0 0 0" timestep="0.002"/>
-  <worldbody>
-    <body name="probe" pos="0 0 0">
-      <joint name="probe_free" type="free"/>
-      <geom name="probe_geom" type="sphere" size="0.08" rgba="0.2 0.8 1 1"/>
-    </body>
-  </worldbody>
-</mujoco>
-`.trim();
-}
-
-function buildCompatibilityMjcf(xml) {
-  return xml
-    .replace(/<compiler[^>]*autolimits="true"[^>]*\/>/, '<compiler angle="radian" inertiafromgeom="true"/>')
-    .replace(/<option[^>]*integrator="implicitfast"[^>]*\/>/, '<option timestep="0.0025" gravity="0 0 0" iterations="70"/>')
-    .replace(/\s*<visual>[\s\S]*?<\/visual>/, '');
-}
-
-function browserXmlError(xml) {
-  const doc = new DOMParser().parseFromString(xml, 'application/xml');
-  const parseError = doc.querySelector('parsererror');
-  return parseError ? parseError.textContent?.trim() || 'Unknown XML parser error.' : null;
-}
-
-function triggerTextDownload(filename, text) {
-  const blob = new Blob([text], { type: 'application/xml;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
 }
 
 export class PuzzleApp {
@@ -381,76 +390,88 @@ export class PuzzleApp {
     this.mjvCamera = null;
 
     this.currentSpec = null;
+    this.currentMjcf = '';
+    this.currentStaticDiagnostics = null;
+    this.currentRuntimeDiagnostics = null;
     this.initialQpos = null;
     this.initialQvel = null;
     this.playerBodyId = 1;
 
     this.keyState = Object.create(null);
+    this.eventLog = [];
     this.lastFrameTime = performance.now();
+    this.runtimeDiagAccumulator = 0;
     this.accumulator = 0;
     this.physicsStep = 0.0025;
     this.elapsed = 0;
     this.paused = true;
     this.solved = false;
     this.ready = false;
-    this.currentProgress = 0;
-    this.lastXml = '';
-    this.lastCompatibilityXml = '';
-    this.diagnosticReport = null;
 
     this.handleKeyDown = this.handleKeyDown.bind(this);
     this.handleKeyUp = this.handleKeyUp.bind(this);
     this.animate = this.animate.bind(this);
   }
 
+  log(message, level = 'info') {
+    const stamp = new Date().toLocaleTimeString('ja-JP', { hour12: false });
+    const line = `[${stamp}] [${level}] ${message}`;
+    this.eventLog.push(line);
+    if (this.eventLog.length > 180) this.eventLog.shift();
+    UI.logText.textContent = this.eventLog.join('\n');
+  }
+
   async init() {
     this.bindUi();
     this.bindKeyboard();
+    this.bindGlobalDebugHooks();
     this.readUrlState();
     this.setMode('初期化中');
-
-    const bootstrapLog = [
-      `User-Agent: ${navigator.userAgent}`,
-      `Page: ${window.location.href}`,
-    ];
-    const logBootstrap = (line) => {
-      bootstrapLog.push(line);
-      this.setDiagnosticLog(bootstrapLog.join('\n'));
-    };
-
-    this.setStatus('Loading MuJoCo…', 'loading');
-    this.setDiagnosticSummary('MuJoCo 読み込み中');
-    this.setDiagnosticLog(bootstrapLog.join('\n'));
-
     try {
-      const loaded = await loadMujocoWithFallback(logBootstrap);
-      this.mujoco = loaded.mujoco;
-      this.mujocoSource = loaded.candidate.name;
-      this.mujoco.FS.mkdir('/working');
+      this.mujoco = await loadMujoco();
+      try {
+        this.mujoco.FS.mkdir('/working');
+      } catch {
+        // directory may already exist
+      }
       this.mujoco.FS.mount(this.mujoco.MEMFS, { root: '.' }, '/working');
       this.ready = true;
       this.setStatus('MuJoCo Ready', 'ready');
-      this.setDiagnosticSummary(`待機中 (${this.mujocoSource})`);
-      this.setDiagnosticLog([
-        ...bootstrapLog,
-        `MjModel.loadFromXML: ${typeof this.mujoco.MjModel?.loadFromXML}`,
-        `MjModel.mj_loadXML: ${typeof this.mujoco.MjModel?.mj_loadXML}`,
-      ].join('
-'));
+      this.log('MuJoCo WASM を初期化しました。');
       await this.generateFromUi();
+      this.exposeDebugApi();
       requestAnimationFrame(this.animate);
     } catch (error) {
       console.error(error);
-      const message = error instanceof Error ? error.message : String(error);
+      this.log(`MuJoCo 初期化失敗: ${error instanceof Error ? error.message : String(error)}`, 'error');
       this.setStatus('Load Error', 'error');
-      this.setDiagnosticSummary('MuJoCo 読み込み失敗');
-      this.setDiagnosticLog([...bootstrapLog, `Fatal: ${message}`].join('
-'));
-      this.showOverlay(`MuJoCo の初期化に失敗しました。
-
-${message}`, 'error', false);
+      this.showOverlay(`MuJoCo の初期化に失敗しました。\n\n${error instanceof Error ? error.message : String(error)}`, 'error', false);
       this.setMode('エラー');
     }
+  }
+
+  bindGlobalDebugHooks() {
+    window.addEventListener('error', (event) => {
+      this.log(`window.onerror: ${event.message}`, 'error');
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+      this.log(`unhandledrejection: ${String(event.reason)}`, 'error');
+    });
+  }
+
+  exposeDebugApi() {
+    window.ChieNoWaDebug = {
+      getSpec: () => this.currentSpec,
+      getMjcf: () => this.currentMjcf,
+      getStaticDiagnostics: () => this.currentStaticDiagnostics,
+      getRuntimeDiagnostics: () => this.currentRuntimeDiagnostics,
+      runDiagnostics: () => this.runDiagnosticsNow(),
+      downloadDiagnostics: () => this.downloadDiagnostics(),
+      downloadSpec: () => this.downloadSpec(),
+      downloadMjcf: () => this.downloadMjcf(),
+      getLogText: () => this.eventLog.join('\n'),
+      reset: () => this.resetPuzzle(),
+    };
   }
 
   bindUi() {
@@ -469,31 +490,37 @@ ${message}`, 'error', false);
     UI.resetBtn.addEventListener('click', () => this.resetPuzzle());
     UI.pauseBtn.addEventListener('click', () => this.togglePause());
 
-    UI.guideToggle.addEventListener('change', () => {
-      this.viewer.setGuideVisible(UI.guideToggle.checked);
-    });
-
-    UI.shareBtn.addEventListener('click', async () => {
+    UI.copyUrlBtn.addEventListener('click', async () => {
       const url = this.buildShareUrl();
       try {
-        if (navigator.clipboard?.writeText) {
-          await navigator.clipboard.writeText(url);
-          this.showOverlay('現在のパズル URL をクリップボードにコピーしました。', 'info', true);
-        } else {
-          window.prompt('URL をコピーしてください', url);
-        }
-      } catch (error) {
-        console.warn(error);
+        await navigator.clipboard.writeText(url);
+        this.showOverlay('現在の URL をコピーしました。', 'info', true);
+      } catch {
         window.prompt('URL をコピーしてください', url);
       }
     });
 
-    UI.selfTestBtn?.addEventListener('click', async () => {
-      await this.runSelfTest({ includePuzzle: true, includeCompatibility: true, reason: 'manual' });
+    UI.debugToggle.addEventListener('change', () => {
+      this.viewer.setDebugVisible(UI.debugToggle.checked);
     });
 
-    UI.downloadMjcfBtn?.addEventListener('click', () => {
-      this.downloadCurrentMjcf();
+    UI.runDiagBtn.addEventListener('click', () => {
+      this.runDiagnosticsNow();
+      this.showOverlay('診断を再計算しました。', 'info', true);
+    });
+
+    UI.downloadDiagBtn.addEventListener('click', () => this.downloadDiagnostics());
+    UI.downloadSpecBtn.addEventListener('click', () => this.downloadSpec());
+    UI.downloadMjcfBtn.addEventListener('click', () => this.downloadMjcf());
+
+    UI.copyLogBtn.addEventListener('click', async () => {
+      const text = this.eventLog.join('\n');
+      try {
+        await navigator.clipboard.writeText(text);
+        this.showOverlay('ログをコピーしました。', 'info', true);
+      } catch {
+        window.prompt('ログをコピーしてください', text);
+      }
     });
   }
 
@@ -520,9 +547,9 @@ ${message}`, 'error', false);
     } else if (event.code === 'Backspace' && !typing) {
       event.preventDefault();
       this.resetPuzzle();
-    } else if (event.code === 'KeyG' && !typing) {
-      UI.guideToggle.checked = !UI.guideToggle.checked;
-      this.viewer.setGuideVisible(UI.guideToggle.checked);
+    } else if (event.code === 'KeyM' && !typing) {
+      UI.debugToggle.checked = !UI.debugToggle.checked;
+      this.viewer.setDebugVisible(UI.debugToggle.checked);
     } else if (event.code === 'KeyC' && !typing) {
       this.recenterCamera();
     }
@@ -553,8 +580,7 @@ ${message}`, 'error', false);
   }
 
   writeUrlState() {
-    const url = this.buildShareUrl();
-    window.history.replaceState({}, '', url);
+    window.history.replaceState({}, '', this.buildShareUrl());
   }
 
   setStatus(text, mode = 'loading') {
@@ -566,191 +592,6 @@ ${message}`, 'error', false);
     UI.modeValue.textContent = text;
   }
 
-  setDiagnosticSummary(text) {
-    if (UI.diagnosticSummary) {
-      UI.diagnosticSummary.textContent = text;
-    }
-  }
-
-  setDiagnosticLog(text) {
-    if (UI.diagnosticLog) {
-      UI.diagnosticLog.textContent = text;
-    }
-  }
-
-  exposeDiagnostics(extra = {}) {
-    window.__chieNoWaDiagnostics = {
-      timestamp: new Date().toISOString(),
-      summary: UI.diagnosticSummary?.textContent ?? '',
-      report: this.diagnosticReport,
-      lastXml: this.lastXml,
-      lastCompatibilityXml: this.lastCompatibilityXml,
-      ...extra,
-    };
-  }
-
-  getAvailableLoaders() {
-    const loaders = [];
-    const mjModelClass = this.mujoco?.MjModel;
-    if (typeof mjModelClass?.loadFromXML === 'function') {
-      loaders.push({
-        name: 'MjModel.loadFromXML',
-        fn: (path) => mjModelClass.loadFromXML(path),
-      });
-    }
-    if (typeof mjModelClass?.mj_loadXML === 'function') {
-      loaders.push({
-        name: 'MjModel.mj_loadXML',
-        fn: (path) => mjModelClass.mj_loadXML(path),
-      });
-    }
-    return loaders;
-  }
-
-  compileModelFromXml(xml, label = 'model') {
-    const parseError = browserXmlError(xml);
-    if (parseError) {
-      throw new Error(`Browser XML parser error (${label}): ${parseError}`);
-    }
-
-    const path = `/working/${label}.xml`;
-    this.mujoco.FS.writeFile(path, xml);
-    const loaders = this.getAvailableLoaders();
-    if (loaders.length === 0) {
-      throw new Error('No MuJoCo XML loader was found. Expected MjModel.loadFromXML or MjModel.mj_loadXML.');
-    }
-
-    const attempts = [];
-    for (const loader of loaders) {
-      try {
-        const model = loader.fn(path);
-        if (model) {
-          return { model, loader: loader.name, path };
-        }
-        attempts.push(`${loader.name}: returned null`);
-      } catch (error) {
-        attempts.push(`${loader.name}: ${safeErrorString(error)}`);
-      }
-    }
-
-    throw new Error(`All MuJoCo XML loaders failed for ${label}.
-${attempts.join('
-')}`);
-  }
-
-  probeModelObjects(model, sceneCap = 4096) {
-    let data = null;
-    let scene = null;
-    let option = null;
-    let perturb = null;
-    let camera = null;
-    try {
-      data = new this.mujoco.MjData(model);
-      scene = new this.mujoco.MjvScene(model, sceneCap);
-      option = new this.mujoco.MjvOption();
-      perturb = new this.mujoco.MjvPerturb();
-      camera = new this.mujoco.MjvCamera();
-      this.mujoco.mj_forward(model, data);
-      return { ok: true };
-    } catch (error) {
-      return { ok: false, error: safeErrorString(error) };
-    } finally {
-      camera?.delete?.();
-      perturb?.delete?.();
-      option?.delete?.();
-      scene?.delete?.();
-      data?.delete?.();
-    }
-  }
-
-  async runSelfTest({ includePuzzle = true, includeCompatibility = true, reason = 'manual' } = {}) {
-    if (!this.ready) {
-      this.setDiagnosticSummary('MuJoCo 未初期化');
-      this.setDiagnosticLog('MuJoCo の初期化前のため自己診断を実行できません。');
-      return null;
-    }
-
-    const lines = [];
-    const report = {
-      reason,
-      userAgent: navigator.userAgent,
-      loaders: this.getAvailableLoaders().map((loader) => loader.name),
-      minimal: null,
-      puzzle: null,
-      compatibility: null,
-    };
-
-    const runCase = (name, xml) => {
-      const info = { ok: false, compile: null, scene: null, error: null, xmlLength: xml.length };
-      try {
-        const compiled = this.compileModelFromXml(xml, name);
-        info.compile = compiled.loader;
-        const sceneProbe = this.probeModelObjects(compiled.model, 4096);
-        info.scene = sceneProbe;
-        info.ok = sceneProbe.ok;
-        if (!sceneProbe.ok) {
-          info.error = sceneProbe.error;
-        }
-        compiled.model.delete();
-      } catch (error) {
-        info.error = safeErrorString(error);
-      }
-      return info;
-    };
-
-    report.minimal = runCase('diagnostic_minimal', buildMinimalDiagnosticMjcf());
-
-    lines.push(`[reason] ${reason}`);
-    lines.push(`[user-agent] ${navigator.userAgent}`);
-    lines.push(`[loaders] ${report.loaders.length ? report.loaders.join(', ') : '(none)'}`);
-    lines.push(`[minimal] ok=${report.minimal.ok} compile=${report.minimal.compile ?? '-'} scene=${report.minimal.scene?.ok ?? '-'} error=${report.minimal.error ?? '-'}`);
-
-    if (includePuzzle) {
-      const seed = Math.trunc(Number(UI.seedInput.value) || 0) || 1;
-      const complexity = clamp(Math.round(Number(UI.complexity.value) || 5), 1, 10);
-      const spec = this.currentSpec ?? generatePuzzleSpec({ seed, complexity });
-      const xml = this.lastXml || buildPuzzleMjcf(spec);
-      this.lastXml = xml;
-      report.puzzle = runCase('diagnostic_puzzle', xml);
-      lines.push(`[puzzle] ok=${report.puzzle.ok} compile=${report.puzzle.compile ?? '-'} scene=${report.puzzle.scene?.ok ?? '-'} error=${report.puzzle.error ?? '-'}`);
-
-      if (includeCompatibility) {
-        this.lastCompatibilityXml = buildCompatibilityMjcf(xml);
-        report.compatibility = runCase('diagnostic_compatibility', this.lastCompatibilityXml);
-        lines.push(`[compatibility] ok=${report.compatibility.ok} compile=${report.compatibility.compile ?? '-'} scene=${report.compatibility.scene?.ok ?? '-'} error=${report.compatibility.error ?? '-'}`);
-      }
-    }
-
-    let summary = '自己診断 OK';
-    if (!report.minimal.ok) {
-      summary = 'MuJoCo 本体/API 側が怪しい';
-    } else if (report.puzzle && !report.puzzle.ok && report.compatibility?.ok) {
-      summary = '生成 MJCF と MuJoCo 版の互換性が怪しい';
-    } else if (report.puzzle && !report.puzzle.ok && report.puzzle.scene && !report.puzzle.scene.ok) {
-      summary = 'MJCF ではなく scene 初期化が怪しい';
-    } else if (report.puzzle && !report.puzzle.ok) {
-      summary = '生成 MJCF 側が怪しい';
-    }
-
-    this.diagnosticReport = report;
-    this.setDiagnosticSummary(summary);
-    this.setDiagnosticLog(lines.join('
-'));
-    this.exposeDiagnostics({ reason, report });
-    return report;
-  }
-
-  downloadCurrentMjcf() {
-    if (!this.lastXml) {
-      this.showOverlay('まだ MJCF が生成されていません。先にパズルを生成してください。', 'error', true);
-      return;
-    }
-    const seed = Math.trunc(Number(UI.seedInput.value) || 0) || 1;
-    const complexity = clamp(Math.round(Number(UI.complexity.value) || 5), 1, 10);
-    triggerTextDownload(`chie_no_wa_seed${seed}_c${complexity}.xml`, this.lastXml);
-    this.showOverlay('現在の MJCF を保存しました。', 'info', true);
-  }
-
   showOverlay(message, mode = 'info', autoHide = true) {
     UI.overlayMessage.textContent = message;
     UI.overlayMessage.className = `overlay ${mode}`;
@@ -758,7 +599,7 @@ ${attempts.join('
       clearTimeout(this.overlayTimer);
       this.overlayTimer = setTimeout(() => {
         UI.overlayMessage.className = 'overlay hidden';
-      }, 2200);
+      }, 2400);
     }
   }
 
@@ -803,7 +644,7 @@ ${attempts.join('
       try {
         this.mujoco.FS.unmount('/working');
       } catch {
-        // Ignore repeated unmount attempts.
+        // ignore repeated unmounts
       }
     }
   }
@@ -824,17 +665,16 @@ ${attempts.join('
     try {
       this.disposeSimulation();
       this.currentSpec = generatePuzzleSpec({ seed, complexity });
-      const xml = buildPuzzleMjcf(this.currentSpec);
-      this.lastXml = xml;
-      this.lastCompatibilityXml = buildCompatibilityMjcf(xml);
-      const compiled = this.compileModelFromXml(xml, 'puzzle');
-      this.model = compiled.model;
-      this.data = new this.mujoco.MjData(this.model);
-      if (!this.data) {
-        throw new Error('Failed to create mjData.');
-      }
+      this.currentStaticDiagnostics = runStaticDiagnostics(this.currentSpec);
+      this.currentMjcf = buildPuzzleMjcf(this.currentSpec);
 
-      this.mjvScene = new this.mujoco.MjvScene(this.model, 4096);
+      this.mujoco.FS.writeFile('/working/puzzle.xml', this.currentMjcf);
+      this.model = this.mujoco.MjModel.mj_loadXML('/working/puzzle.xml');
+      if (!this.model) throw new Error('MjModel.mj_loadXML returned null.');
+      this.data = new this.mujoco.MjData(this.model);
+      if (!this.data) throw new Error('Failed to create mjData.');
+
+      this.mjvScene = new this.mujoco.MjvScene(this.model, 2 ** 15);
       this.mjvOption = new this.mujoco.MjvOption();
       this.mjvPerturb = new this.mujoco.MjvPerturb();
       this.mjvCamera = new this.mujoco.MjvCamera();
@@ -844,51 +684,42 @@ ${attempts.join('
       this.initialQvel = Array.from(this.data.qvel);
       this.elapsed = 0;
       this.accumulator = 0;
+      this.runtimeDiagAccumulator = 0;
       this.solved = false;
       this.paused = false;
-      this.currentProgress = 0;
 
-      this.viewer.setGuide(this.currentSpec.pathPoints);
-      this.viewer.setGuideVisible(UI.guideToggle.checked);
+      this.viewer.setDebugMarkers(this.currentSpec);
+      this.viewer.setDebugVisible(UI.debugToggle.checked);
       this.recenterCamera();
-
-      UI.seedEcho.textContent = String(seed);
-      UI.turnCount.textContent = String(this.currentSpec.stats.turns);
-      UI.gateCount.textContent = String(this.currentSpec.stats.gateCount);
-      UI.wireLength.textContent = `${this.currentSpec.stats.wireLength.toFixed(2)} m`;
-      UI.progressValue.textContent = '0%';
-      UI.timerValue.textContent = '00:00.0';
+      this.updateSummaryUi();
       this.updatePauseButton();
+      this.updateRuntimeUi(true);
+
       this.setMode('プレイ中');
       this.setStatus('Ready', 'ready');
-      this.setDiagnosticSummary('直近生成 OK');
-      this.setDiagnosticLog([
-        `[seed] ${seed}`,
-        `[complexity] ${complexity}`,
-        `[xml-loader] ${compiled.loader}`,
-        `[xml-length] ${xml.length}`,
-        `[scene-cap] 4096`,
-      ].join('\n'));
-      this.exposeDiagnostics({
-        report: null,
-        loader: compiled.loader,
-        seed,
-        complexity,
-        xmlLength: xml.length,
-      });
-      this.showOverlay('新しいパズルを生成しました。青いリングを右端の出口まで運んでください。', 'info', true);
+      this.log(`パズル生成: family=${this.currentSpec.family.id}, seed=${seed}, complexity=${complexity}`);
+      this.currentSpec.generationLog.forEach((line) => this.log(`gen: ${line}`));
+      this.showOverlay('新しい知恵の輪を生成しました。シアンの可動片を分離してください。', 'info', true);
     } catch (error) {
       console.error(error);
-      const report = await this.runSelfTest({ includePuzzle: true, includeCompatibility: true, reason: 'auto-after-generate-error' });
       this.setStatus('Compile Error', 'error');
       this.setMode('エラー');
-      const summary = report ? `
-
-診断: ${UI.diagnosticSummary.textContent}` : '';
-      this.showOverlay(`パズル生成に失敗しました。
-
-${safeErrorString(error)}${summary}`, 'error', false);
+      this.log(`生成失敗: ${error instanceof Error ? error.message : String(error)}`, 'error');
+      this.showOverlay(`パズル生成に失敗しました。\n\n${error instanceof Error ? error.message : String(error)}`, 'error', false);
     }
+  }
+
+  updateSummaryUi() {
+    if (!this.currentSpec || !this.currentStaticDiagnostics) return;
+    UI.familyValue.textContent = this.currentSpec.family.label;
+    UI.gapRatioValue.textContent = `${this.currentSpec.stats.avgGapRatio.toFixed(2)}x`;
+    UI.difficultyValue.textContent = `${this.currentSpec.stats.estimatedDifficulty}/10`;
+    UI.wireLengthValue.textContent = `${this.currentSpec.stats.totalWireLength.toFixed(2)} m`;
+    UI.separationValue.textContent = '0%';
+    UI.contactValue.textContent = '0';
+    UI.timerValue.textContent = '00:00.0';
+    UI.seedEcho.textContent = String(this.currentSpec.seed);
+    UI.staticDiagText.textContent = formatStaticDiagnostics(this.currentStaticDiagnostics);
   }
 
   resetPuzzle() {
@@ -899,13 +730,14 @@ ${safeErrorString(error)}${summary}`, 'error', false);
     this.mujoco.mj_forward(this.model, this.data);
     this.elapsed = 0;
     this.accumulator = 0;
+    this.runtimeDiagAccumulator = 0;
     this.solved = false;
     this.paused = false;
-    this.currentProgress = 0;
     UI.timerValue.textContent = '00:00.0';
-    UI.progressValue.textContent = '0%';
     this.updatePauseButton();
+    this.updateRuntimeUi(true);
     this.setMode('プレイ中');
+    this.log('パズルを初期状態に戻しました。');
     this.showOverlay('初期位置へ戻しました。', 'info', true);
   }
 
@@ -914,21 +746,40 @@ ${safeErrorString(error)}${summary}`, 'error', false);
     this.paused = !this.paused;
     this.updatePauseButton();
     this.setMode(this.paused ? '一時停止' : 'プレイ中');
+    this.updateRuntimeUi(true);
   }
 
   updatePauseButton() {
     UI.pauseBtn.textContent = this.paused ? '再開' : '一時停止';
   }
 
-  getPlayerPosition() {
-    if (!this.data) return new THREE.Vector3();
+  getBodyState() {
+    if (!this.data) {
+      return {
+        pos: [0, 0, 0],
+        quat: [1, 0, 0, 0],
+        linvel: [0, 0, 0],
+        angvel: [0, 0, 0],
+        ncon: 0,
+      };
+    }
     const qpos = this.data.qpos;
-    return new THREE.Vector3(qpos[0], qpos[1], qpos[2]);
+    const qvel = this.data.qvel;
+    return {
+      pos: [qpos[0], qpos[1], qpos[2]],
+      quat: [qpos[3], qpos[4], qpos[5], qpos[6]],
+      linvel: [qvel[0], qvel[1], qvel[2]],
+      angvel: [qvel[3], qvel[4], qvel[5]],
+      ncon: this.data.ncon ?? 0,
+      paused: this.paused,
+      solved: this.solved,
+    };
   }
 
   updateCameraFollow() {
     if (!this.data || !UI.followToggle.checked) return;
-    const pos = this.getPlayerPosition();
+    const qpos = this.data.qpos;
+    const pos = new THREE.Vector3(qpos[0], qpos[1], qpos[2]);
     this.viewer.controls.target.lerp(pos, 0.14);
   }
 
@@ -965,16 +816,13 @@ ${safeErrorString(error)}${summary}`, 'error', false);
     if (torque.lengthSq() > 0) torque.normalize();
 
     const turboEnabled = UI.turboHintToggle.checked && (this.keyState.ShiftLeft || this.keyState.ShiftRight);
-    const forceScale = turboEnabled ? 16 : 9;
-    const torqueScale = turboEnabled ? 1.9 : 1.1;
+    const forceScale = turboEnabled ? 16 : 8.4;
+    const torqueScale = turboEnabled ? 1.8 : 1.0;
 
     force.multiplyScalar(forceScale);
     torque.multiplyScalar(torqueScale);
 
-    return {
-      force,
-      torque,
-    };
+    return { force, torque };
   }
 
   applyControls() {
@@ -991,29 +839,77 @@ ${safeErrorString(error)}${summary}`, 'error', false);
     wrench[base + 5] = torque.z;
   }
 
-  updateProgressAndSolved() {
-    if (!this.data || !this.currentSpec) return;
-    const qpos = this.data.qpos;
-    const pos = [qpos[0], qpos[1], qpos[2]];
-    const along = polylineProgress(this.currentSpec.pathPoints, pos);
-    const progress = clamp(along / this.currentSpec.stats.wireLength, 0, 1.25);
-    this.currentProgress = progress;
-    UI.progressValue.textContent = `${Math.round(Math.min(progress, 1) * 100)}%`;
+  updateRuntimeUi(force = false) {
+    if (!this.currentSpec) return;
+    const state = this.getBodyState();
+    this.currentRuntimeDiagnostics = buildRuntimeDiagnostics(this.currentSpec, state);
+    if (!force && this.runtimeDiagAccumulator < 0.16) return;
 
-    const exit = this.currentSpec.exitPoint;
-    const dir = this.currentSpec.exitDir;
-    const dx = pos[0] - exit[0];
-    const dy = pos[1] - exit[1];
-    const dz = pos[2] - exit[2];
-    const exitDot = dx * dir[0] + dy * dir[1] + dz * dir[2];
+    UI.runtimeDiagText.textContent = formatRuntimeDiagnostics(this.currentRuntimeDiagnostics);
+    UI.separationValue.textContent = `${Math.round(Math.min(this.currentRuntimeDiagnostics.separation, 1) * 100)}%`;
+    UI.contactValue.textContent = String(this.currentRuntimeDiagnostics.contactCount);
+    this.viewer.updateMovingMarkers(this.currentSpec, state);
+    this.runtimeDiagAccumulator = 0;
+  }
 
-    if (!this.solved && exitDot > this.currentSpec.exitThreshold) {
+  updateSolvedState() {
+    if (!this.currentSpec || !this.currentRuntimeDiagnostics || this.solved) return;
+    if (
+      this.currentRuntimeDiagnostics.centerDistance > this.currentSpec.geometry.solveDistance
+      && this.currentRuntimeDiagnostics.contactCount === 0
+    ) {
       this.solved = true;
       this.paused = true;
       this.updatePauseButton();
+      this.updateRuntimeUi(true);
       this.setMode('クリア');
-      this.showOverlay(`クリア！\n\n経過時間: ${formatTime(this.elapsed)}\nSeed: ${this.currentSpec.seed}\n複雑性: ${this.currentSpec.complexity}`, 'solved', false);
+      this.log(`クリア: ${formatTime(this.elapsed)} seed=${this.currentSpec.seed}`);
+      this.showOverlay(`クリア！\n\n経過時間: ${formatTime(this.elapsed)}\nfamily: ${this.currentSpec.family.id}\nseed: ${this.currentSpec.seed}`, 'solved', false);
     }
+  }
+
+  runDiagnosticsNow() {
+    if (!this.currentSpec) return null;
+    this.currentStaticDiagnostics = runStaticDiagnostics(this.currentSpec);
+    UI.staticDiagText.textContent = formatStaticDiagnostics(this.currentStaticDiagnostics);
+    this.updateRuntimeUi(true);
+    this.log('静的診断と実行診断を再計算しました。');
+    return {
+      static: this.currentStaticDiagnostics,
+      runtime: this.currentRuntimeDiagnostics,
+    };
+  }
+
+  downloadDiagnostics() {
+    if (!this.currentSpec) return;
+    if (!this.currentStaticDiagnostics) this.currentStaticDiagnostics = runStaticDiagnostics(this.currentSpec);
+    if (!this.currentRuntimeDiagnostics) this.updateRuntimeUi(true);
+    const bundle = buildDiagnosticsBundle({
+      spec: this.currentSpec,
+      staticDiag: this.currentStaticDiagnostics,
+      runtimeDiag: this.currentRuntimeDiagnostics,
+      logLines: this.eventLog,
+    });
+    downloadText(
+      `chie-no-wa-diagnostics-seed-${this.currentSpec.seed}.json`,
+      `${JSON.stringify(bundle, null, 2)}\n`,
+    );
+    this.log('診断 JSON をダウンロードしました。');
+  }
+
+  downloadSpec() {
+    if (!this.currentSpec) return;
+    downloadText(
+      `chie-no-wa-spec-seed-${this.currentSpec.seed}.json`,
+      `${JSON.stringify(this.currentSpec, null, 2)}\n`,
+    );
+    this.log('spec JSON をダウンロードしました。');
+  }
+
+  downloadMjcf() {
+    if (!this.currentMjcf || !this.currentSpec) return;
+    downloadText(`chie-no-wa-seed-${this.currentSpec.seed}.xml`, `${this.currentMjcf}\n`);
+    this.log('MJCF XML をダウンロードしました。');
   }
 
   stepSimulation(dt) {
@@ -1021,7 +917,7 @@ ${safeErrorString(error)}${summary}`, 'error', false);
     this.accumulator += Math.min(dt, 0.05);
 
     let safety = 0;
-    while (this.accumulator >= this.physicsStep && safety < 120) {
+    while (this.accumulator >= this.physicsStep && safety < 140) {
       this.applyControls();
       this.mujoco.mj_step(this.model, this.data);
       this.elapsed += this.physicsStep;
@@ -1030,16 +926,18 @@ ${safeErrorString(error)}${summary}`, 'error', false);
     }
 
     UI.timerValue.textContent = formatTime(this.elapsed);
-    this.updateProgressAndSolved();
   }
 
   animate(now) {
     const dt = Math.min((now - this.lastFrameTime) / 1000, 0.05);
     this.lastFrameTime = now;
+    this.runtimeDiagAccumulator += dt;
 
     if (this.data && this.model && this.mjvScene) {
       this.stepSimulation(dt);
       this.updateCameraFollow();
+      this.updateRuntimeUi(false);
+      this.updateSolvedState();
       this.viewer.sync(this.mujoco, this.model, this.data, this.mjvScene, this.mjvOption, this.mjvPerturb, this.mjvCamera);
       this.viewer.render();
     } else {
