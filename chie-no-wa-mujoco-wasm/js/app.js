@@ -101,6 +101,7 @@ function summarizeMujocoApi(mujoco) {
     hasMjModelClass: !!mujoco?.MjModel,
     hasMjDataClass: !!mujoco?.MjData,
     hasStaticMjLoadXml: typeof mujoco?.MjModel?.mj_loadXML === 'function',
+    hasMjModelLoadFromXml: typeof mujoco?.MjModel?.loadFromXML === 'function',
     hasLegacyModelCtor: typeof mujoco?.Model === 'function',
     hasStateCtor: typeof mujoco?.State === 'function',
     hasSimulationCtor: typeof mujoco?.Simulation === 'function',
@@ -721,7 +722,14 @@ export class PuzzleApp {
 
 
 
-  loadModelFromXml(xmlPath) {
+  loadModelFromXml(xmlPath, xmlText = null) {
+    if (typeof this.mujoco?.MjModel?.loadFromXML === 'function') {
+      const xmlContent = xmlText ?? this.mujoco.FS.readFile(xmlPath, { encoding: 'utf8' });
+      const model = this.mujoco.MjModel.loadFromXML(xmlContent);
+      if (!model) throw new Error('MjModel.loadFromXML returned null.');
+      return model;
+    }
+
     if (typeof this.mujoco?.MjModel?.mj_loadXML === 'function') {
       const model = this.mujoco.MjModel.mj_loadXML(xmlPath);
       if (!model) throw new Error('MjModel.mj_loadXML returned null.');
@@ -730,7 +738,7 @@ export class PuzzleApp {
 
     const apiSummary = summarizeMujocoApi(this.mujoco);
     throw new Error(
-      `MuJoCo API mismatch: MjModel.mj_loadXML が見つかりません。` +
+      `MuJoCo API mismatch: MjModel.loadFromXML / MjModel.mj_loadXML の両方が見つかりません。` +
       ` loadedKeys=${apiSummary.topLevelKeys.slice(0, 24).join(',')}`
     );
   }
@@ -769,7 +777,7 @@ export class PuzzleApp {
       this.currentMjcf = buildPuzzleMjcf(this.currentSpec);
 
       this.mujoco.FS.writeFile('/working/puzzle.xml', this.currentMjcf);
-      this.model = this.loadModelFromXml('/working/puzzle.xml');
+      this.model = this.loadModelFromXml('/working/puzzle.xml', this.currentMjcf);
       this.data = this.createDataForModel(this.model);
 
       this.mjvScene = new this.mujoco.MjvScene(this.model, 2 ** 15);
