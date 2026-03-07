@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import loadMujoco from 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco.js';
+import loadMujoco from 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js';
 import { buildPuzzleMjcf, generatePuzzleSpec } from './puzzle-generator.js';
 import {
   buildDiagnosticsBundle,
