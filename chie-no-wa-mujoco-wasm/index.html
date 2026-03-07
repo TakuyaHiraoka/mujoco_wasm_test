@@ -94,6 +94,22 @@
         </div>
       </section>
 
+      <section class="panel-section diagnostics-box">
+        <div class="section-title">診断</div>
+        <div class="button-row">
+          <button id="selfTestBtn" class="btn secondary" type="button">自己診断</button>
+          <button id="downloadMjcfBtn" class="btn secondary" type="button">現在の MJCF を保存</button>
+        </div>
+        <div class="inline-meta">
+          <span>診断結果</span>
+          <strong id="diagnosticSummary">未実行</strong>
+        </div>
+        <details class="diagnostic-details">
+          <summary>詳細ログ</summary>
+          <pre id="diagnosticLog" class="diagnostic-log">まだ診断は実行されていません。</pre>
+        </details>
+      </section>
+
       <section class="panel-section objective-box">
         <div class="section-title">目的</div>
         <p>
@@ -131,6 +147,7 @@
           </div>
         </div>
       </details>
+
     </aside>
 
     <main id="viewerPanel">

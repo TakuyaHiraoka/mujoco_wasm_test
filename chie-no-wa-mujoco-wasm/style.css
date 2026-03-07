@@ -304,6 +304,30 @@ canvas {
   font-size: 0.85rem;
 }
 
+.diagnostic-details {
+  margin-top: 10px;
+}
+
+.diagnostic-details summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.diagnostic-log {
+  margin: 10px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(0, 0, 0, 0.22);
+  color: #d9e6ff;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 @media (max-width: 980px) {
   body {
     overflow: auto;

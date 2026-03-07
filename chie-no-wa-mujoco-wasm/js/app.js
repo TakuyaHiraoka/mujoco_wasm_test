@@ -15,6 +15,8 @@ const UI = {
   resetBtn: document.getElementById('resetBtn'),
   pauseBtn: document.getElementById('pauseBtn'),
   shareBtn: document.getElementById('shareBtn'),
+  selfTestBtn: document.getElementById('selfTestBtn'),
+  downloadMjcfBtn: document.getElementById('downloadMjcfBtn'),
   guideToggle: document.getElementById('guideToggle'),
   followToggle: document.getElementById('followToggle'),
   turboHintToggle: document.getElementById('turboHintToggle'),
@@ -25,6 +27,8 @@ const UI = {
   timerValue: document.getElementById('timerValue'),
   seedEcho: document.getElementById('seedEcho'),
   modeValue: document.getElementById('modeValue'),
+  diagnosticSummary: document.getElementById('diagnosticSummary'),
+  diagnosticLog: document.getElementById('diagnosticLog'),
   overlayMessage: document.getElementById('overlayMessage'),
 };
 
@@ -265,6 +269,52 @@ function bodyQuaternionFromQpos(qpos) {
   return new THREE.Quaternion(qpos[4], qpos[5], qpos[6], qpos[3]);
 }
 
+function safeErrorString(error) {
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}`;
+  }
+  return String(error);
+}
+
+function buildMinimalDiagnosticMjcf() {
+  return `
+<mujoco model="diagnostic_minimal">
+  <option gravity="0 0 0" timestep="0.002"/>
+  <worldbody>
+    <body name="probe" pos="0 0 0">
+      <joint name="probe_free" type="free"/>
+      <geom name="probe_geom" type="sphere" size="0.08" rgba="0.2 0.8 1 1"/>
+    </body>
+  </worldbody>
+</mujoco>
+`.trim();
+}
+
+function buildCompatibilityMjcf(xml) {
+  return xml
+    .replace(/<compiler[^>]*autolimits="true"[^>]*\/>/, '<compiler angle="radian" inertiafromgeom="true"/>')
+    .replace(/<option[^>]*integrator="implicitfast"[^>]*\/>/, '<option timestep="0.0025" gravity="0 0 0" iterations="70"/>')
+    .replace(/\s*<visual>[\s\S]*?<\/visual>/, '');
+}
+
+function browserXmlError(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const parseError = doc.querySelector('parsererror');
+  return parseError ? parseError.textContent?.trim() || 'Unknown XML parser error.' : null;
+}
+
+function triggerTextDownload(filename, text) {
+  const blob = new Blob([text], { type: 'application/xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 export class PuzzleApp {
   constructor() {
     this.viewer = new MujocoThreeBridge(UI.canvasWrap);
@@ -290,6 +340,9 @@ export class PuzzleApp {
     this.solved = false;
     this.ready = false;
     this.currentProgress = 0;
+    this.lastXml = '';
+    this.lastCompatibilityXml = '';
+    this.diagnosticReport = null;
 
     this.handleKeyDown = this.handleKeyDown.bind(this);
     this.handleKeyUp = this.handleKeyUp.bind(this);
@@ -307,6 +360,10 @@ export class PuzzleApp {
       this.mujoco.FS.mount(this.mujoco.MEMFS, { root: '.' }, '/working');
       this.ready = true;
       this.setStatus('MuJoCo Ready', 'ready');
+      this.setDiagnosticSummary('待機中');
+      this.setDiagnosticLog(`User-Agent: ${navigator.userAgent}
+MjModel.loadFromXML: ${typeof this.mujoco.MjModel?.loadFromXML}
+MjModel.mj_loadXML: ${typeof this.mujoco.MjModel?.mj_loadXML}`);
       await this.generateFromUi();
       requestAnimationFrame(this.animate);
     } catch (error) {
@@ -350,6 +407,14 @@ export class PuzzleApp {
         console.warn(error);
         window.prompt('URL をコピーしてください', url);
       }
+    });
+
+    UI.selfTestBtn?.addEventListener('click', async () => {
+      await this.runSelfTest({ includePuzzle: true, includeCompatibility: true, reason: 'manual' });
+    });
+
+    UI.downloadMjcfBtn?.addEventListener('click', () => {
+      this.downloadCurrentMjcf();
     });
   }
 
@@ -420,6 +485,191 @@ export class PuzzleApp {
 
   setMode(text) {
     UI.modeValue.textContent = text;
+  }
+
+  setDiagnosticSummary(text) {
+    if (UI.diagnosticSummary) {
+      UI.diagnosticSummary.textContent = text;
+    }
+  }
+
+  setDiagnosticLog(text) {
+    if (UI.diagnosticLog) {
+      UI.diagnosticLog.textContent = text;
+    }
+  }
+
+  exposeDiagnostics(extra = {}) {
+    window.__chieNoWaDiagnostics = {
+      timestamp: new Date().toISOString(),
+      summary: UI.diagnosticSummary?.textContent ?? '',
+      report: this.diagnosticReport,
+      lastXml: this.lastXml,
+      lastCompatibilityXml: this.lastCompatibilityXml,
+      ...extra,
+    };
+  }
+
+  getAvailableLoaders() {
+    const loaders = [];
+    const mjModelClass = this.mujoco?.MjModel;
+    if (typeof mjModelClass?.loadFromXML === 'function') {
+      loaders.push({
+        name: 'MjModel.loadFromXML',
+        fn: (path) => mjModelClass.loadFromXML(path),
+      });
+    }
+    if (typeof mjModelClass?.mj_loadXML === 'function') {
+      loaders.push({
+        name: 'MjModel.mj_loadXML',
+        fn: (path) => mjModelClass.mj_loadXML(path),
+      });
+    }
+    return loaders;
+  }
+
+  compileModelFromXml(xml, label = 'model') {
+    const parseError = browserXmlError(xml);
+    if (parseError) {
+      throw new Error(`Browser XML parser error (${label}): ${parseError}`);
+    }
+
+    const path = `/working/${label}.xml`;
+    this.mujoco.FS.writeFile(path, xml);
+    const loaders = this.getAvailableLoaders();
+    if (loaders.length === 0) {
+      throw new Error('No MuJoCo XML loader was found. Expected MjModel.loadFromXML or MjModel.mj_loadXML.');
+    }
+
+    const attempts = [];
+    for (const loader of loaders) {
+      try {
+        const model = loader.fn(path);
+        if (model) {
+          return { model, loader: loader.name, path };
+        }
+        attempts.push(`${loader.name}: returned null`);
+      } catch (error) {
+        attempts.push(`${loader.name}: ${safeErrorString(error)}`);
+      }
+    }
+
+    throw new Error(`All MuJoCo XML loaders failed for ${label}.
+${attempts.join('
+')}`);
+  }
+
+  probeModelObjects(model, sceneCap = 4096) {
+    let data = null;
+    let scene = null;
+    let option = null;
+    let perturb = null;
+    let camera = null;
+    try {
+      data = new this.mujoco.MjData(model);
+      scene = new this.mujoco.MjvScene(model, sceneCap);
+      option = new this.mujoco.MjvOption();
+      perturb = new this.mujoco.MjvPerturb();
+      camera = new this.mujoco.MjvCamera();
+      this.mujoco.mj_forward(model, data);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: safeErrorString(error) };
+    } finally {
+      camera?.delete?.();
+      perturb?.delete?.();
+      option?.delete?.();
+      scene?.delete?.();
+      data?.delete?.();
+    }
+  }
+
+  async runSelfTest({ includePuzzle = true, includeCompatibility = true, reason = 'manual' } = {}) {
+    if (!this.ready) {
+      this.setDiagnosticSummary('MuJoCo 未初期化');
+      this.setDiagnosticLog('MuJoCo の初期化前のため自己診断を実行できません。');
+      return null;
+    }
+
+    const lines = [];
+    const report = {
+      reason,
+      userAgent: navigator.userAgent,
+      loaders: this.getAvailableLoaders().map((loader) => loader.name),
+      minimal: null,
+      puzzle: null,
+      compatibility: null,
+    };
+
+    const runCase = (name, xml) => {
+      const info = { ok: false, compile: null, scene: null, error: null, xmlLength: xml.length };
+      try {
+        const compiled = this.compileModelFromXml(xml, name);
+        info.compile = compiled.loader;
+        const sceneProbe = this.probeModelObjects(compiled.model, 4096);
+        info.scene = sceneProbe;
+        info.ok = sceneProbe.ok;
+        if (!sceneProbe.ok) {
+          info.error = sceneProbe.error;
+        }
+        compiled.model.delete();
+      } catch (error) {
+        info.error = safeErrorString(error);
+      }
+      return info;
+    };
+
+    report.minimal = runCase('diagnostic_minimal', buildMinimalDiagnosticMjcf());
+
+    lines.push(`[reason] ${reason}`);
+    lines.push(`[user-agent] ${navigator.userAgent}`);
+    lines.push(`[loaders] ${report.loaders.length ? report.loaders.join(', ') : '(none)'}`);
+    lines.push(`[minimal] ok=${report.minimal.ok} compile=${report.minimal.compile ?? '-'} scene=${report.minimal.scene?.ok ?? '-'} error=${report.minimal.error ?? '-'}`);
+
+    if (includePuzzle) {
+      const seed = Math.trunc(Number(UI.seedInput.value) || 0) || 1;
+      const complexity = clamp(Math.round(Number(UI.complexity.value) || 5), 1, 10);
+      const spec = this.currentSpec ?? generatePuzzleSpec({ seed, complexity });
+      const xml = this.lastXml || buildPuzzleMjcf(spec);
+      this.lastXml = xml;
+      report.puzzle = runCase('diagnostic_puzzle', xml);
+      lines.push(`[puzzle] ok=${report.puzzle.ok} compile=${report.puzzle.compile ?? '-'} scene=${report.puzzle.scene?.ok ?? '-'} error=${report.puzzle.error ?? '-'}`);
+
+      if (includeCompatibility) {
+        this.lastCompatibilityXml = buildCompatibilityMjcf(xml);
+        report.compatibility = runCase('diagnostic_compatibility', this.lastCompatibilityXml);
+        lines.push(`[compatibility] ok=${report.compatibility.ok} compile=${report.compatibility.compile ?? '-'} scene=${report.compatibility.scene?.ok ?? '-'} error=${report.compatibility.error ?? '-'}`);
+      }
+    }
+
+    let summary = '自己診断 OK';
+    if (!report.minimal.ok) {
+      summary = 'MuJoCo 本体/API 側が怪しい';
+    } else if (report.puzzle && !report.puzzle.ok && report.compatibility?.ok) {
+      summary = '生成 MJCF と MuJoCo 版の互換性が怪しい';
+    } else if (report.puzzle && !report.puzzle.ok && report.puzzle.scene && !report.puzzle.scene.ok) {
+      summary = 'MJCF ではなく scene 初期化が怪しい';
+    } else if (report.puzzle && !report.puzzle.ok) {
+      summary = '生成 MJCF 側が怪しい';
+    }
+
+    this.diagnosticReport = report;
+    this.setDiagnosticSummary(summary);
+    this.setDiagnosticLog(lines.join('
+'));
+    this.exposeDiagnostics({ reason, report });
+    return report;
+  }
+
+  downloadCurrentMjcf() {
+    if (!this.lastXml) {
+      this.showOverlay('まだ MJCF が生成されていません。先にパズルを生成してください。', 'error', true);
+      return;
+    }
+    const seed = Math.trunc(Number(UI.seedInput.value) || 0) || 1;
+    const complexity = clamp(Math.round(Number(UI.complexity.value) || 5), 1, 10);
+    triggerTextDownload(`chie_no_wa_seed${seed}_c${complexity}.xml`, this.lastXml);
+    this.showOverlay('現在の MJCF を保存しました。', 'info', true);
   }
 
   showOverlay(message, mode = 'info', autoHide = true) {
@@ -496,17 +746,16 @@ export class PuzzleApp {
       this.disposeSimulation();
       this.currentSpec = generatePuzzleSpec({ seed, complexity });
       const xml = buildPuzzleMjcf(this.currentSpec);
-      this.mujoco.FS.writeFile('/working/puzzle.xml', xml);
-      this.model = this.mujoco.MjModel.mj_loadXML('/working/puzzle.xml');
-      if (!this.model) {
-        throw new Error('MjModel.mj_loadXML returned null.');
-      }
+      this.lastXml = xml;
+      this.lastCompatibilityXml = buildCompatibilityMjcf(xml);
+      const compiled = this.compileModelFromXml(xml, 'puzzle');
+      this.model = compiled.model;
       this.data = new this.mujoco.MjData(this.model);
       if (!this.data) {
         throw new Error('Failed to create mjData.');
       }
 
-      this.mjvScene = new this.mujoco.MjvScene(this.model, 2 ** 15);
+      this.mjvScene = new this.mujoco.MjvScene(this.model, 4096);
       this.mjvOption = new this.mujoco.MjvOption();
       this.mjvPerturb = new this.mujoco.MjvPerturb();
       this.mjvCamera = new this.mujoco.MjvCamera();
@@ -533,12 +782,33 @@ export class PuzzleApp {
       this.updatePauseButton();
       this.setMode('プレイ中');
       this.setStatus('Ready', 'ready');
+      this.setDiagnosticSummary('直近生成 OK');
+      this.setDiagnosticLog([
+        `[seed] ${seed}`,
+        `[complexity] ${complexity}`,
+        `[xml-loader] ${compiled.loader}`,
+        `[xml-length] ${xml.length}`,
+        `[scene-cap] 4096`,
+      ].join('\n'));
+      this.exposeDiagnostics({
+        report: null,
+        loader: compiled.loader,
+        seed,
+        complexity,
+        xmlLength: xml.length,
+      });
       this.showOverlay('新しいパズルを生成しました。青いリングを右端の出口まで運んでください。', 'info', true);
     } catch (error) {
       console.error(error);
+      const report = await this.runSelfTest({ includePuzzle: true, includeCompatibility: true, reason: 'auto-after-generate-error' });
       this.setStatus('Compile Error', 'error');
       this.setMode('エラー');
-      this.showOverlay(`パズル生成に失敗しました。\n\n${error instanceof Error ? error.message : String(error)}`, 'error', false);
+      const summary = report ? `
+
+診断: ${UI.diagnosticSummary.textContent}` : '';
+      this.showOverlay(`パズル生成に失敗しました。
+
+${safeErrorString(error)}${summary}`, 'error', false);
     }
   }
 
