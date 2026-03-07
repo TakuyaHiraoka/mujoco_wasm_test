@@ -472,6 +472,7 @@ export class PuzzleApp {
     this.paused = true;
     this.solved = false;
     this.ready = false;
+    this.solveConditionHold = 0;
 
     this.handleKeyDown = this.handleKeyDown.bind(this);
     this.handleKeyUp = this.handleKeyUp.bind(this);
@@ -542,6 +543,7 @@ export class PuzzleApp {
       getLogText: () => this.eventLog.join('\n'),
       getMujocoSourceUrl: () => this.mujocoSourceUrl,
       reset: () => this.resetPuzzle(),
+      runSelfCheck: (options = {}) => this.runSelfCheck(options),
     };
   }
 
@@ -834,6 +836,7 @@ export class PuzzleApp {
       this.runtimeDiagAccumulator = 0;
       this.solved = false;
       this.paused = false;
+      this.solveConditionHold = 0;
 
       this.viewer.setDebugMarkers(this.currentSpec);
       this.viewer.setDebugVisible(UI.debugToggle.checked);
@@ -880,6 +883,7 @@ export class PuzzleApp {
     this.runtimeDiagAccumulator = 0;
     this.solved = false;
     this.paused = false;
+    this.solveConditionHold = 0;
     UI.timerValue.textContent = '00:00.0';
     this.updatePauseButton();
     this.updateRuntimeUi(true);
@@ -999,30 +1003,77 @@ export class PuzzleApp {
     this.runtimeDiagAccumulator = 0;
   }
 
-  updateSolvedState() {
+  updateSolvedState(dt = this.physicsStep) {
     if (!this.currentSpec || !this.currentRuntimeDiagnostics || this.solved) return;
     const diag = this.currentRuntimeDiagnostics;
-    const solved = (
-      diag.interPieceClearance > this.currentSpec.geometry.solveClearance
-      && diag.mutualHole < this.currentSpec.geometry.solveMutualHoleMax
-      && diag.centerDistance > this.currentSpec.geometry.solveDistance * 0.72
+    const geom = this.currentSpec.geometry;
+    const solveCandidate = (
+      diag.threadingCrossings === 0
+      && diag.threadingGapCrossings === 0
+      && diag.threadingScore < (geom.solveThreadingScoreMax ?? 0.02)
+      && diag.interPieceClearance > geom.solveClearance
+      && diag.mutualHole < (geom.solveMutualHoleMax ?? 0.03)
+      && diag.centerDistance > (geom.solveCenterDistanceMin ?? geom.solveDistance)
       && diag.contactCount === 0
-      && diag.speed < 1.25
-      && diag.angularSpeed < 4.0
+      && diag.speed < 0.9
+      && diag.angularSpeed < 2.2
     );
-    if (solved) {
-      this.solved = true;
-      this.paused = true;
-      this.updatePauseButton();
-      this.updateRuntimeUi(true);
-      this.setMode('クリア');
-      this.log(`クリア: ${formatTime(this.elapsed)} seed=${this.currentSpec.seed} clearance=${diag.interPieceClearance.toFixed(4)} mutualHole=${diag.mutualHole.toFixed(3)}`);
-      this.showOverlay(`クリア！
+
+    this.solveConditionHold = solveCandidate
+      ? this.solveConditionHold + Math.max(0, dt)
+      : 0;
+
+    if (this.solveConditionHold < (geom.solveHoldDuration ?? 0.35)) return;
+
+    this.solved = true;
+    this.paused = true;
+    this.updatePauseButton();
+    this.updateRuntimeUi(true);
+    this.setMode('クリア');
+    this.log(`クリア: ${formatTime(this.elapsed)} seed=${this.currentSpec.seed} clearance=${diag.interPieceClearance.toFixed(4)} threading=${diag.threadingCrossings}/${diag.threadingGapCrossings}`);
+    this.showOverlay(`クリア！
 
 経過時間: ${formatTime(this.elapsed)}
 family: ${this.currentSpec.family.id}
 seed: ${this.currentSpec.seed}`, 'solved', false);
+  }
+
+  runSelfCheck({ seeds = [1, 2, 3, 4, 5], complexities = [1, 4, 7, 10] } = {}) {
+    const results = [];
+    for (const complexity of complexities) {
+      for (const seed of seeds) {
+        const spec = generatePuzzleSpec({ seed, complexity });
+        const staticDiag = runStaticDiagnostics(spec);
+        const runtimeDiag = buildRuntimeDiagnostics(spec, {
+          pos: spec.startPose.pos,
+          quat: spec.startPose.quat,
+          linvel: [0, 0, 0],
+          angvel: [0, 0, 0],
+          ncon: 0,
+          paused: false,
+          solved: false,
+        });
+        results.push({
+          seed,
+          complexity,
+          startSolvedLike: runtimeDiag.threadingCrossings === 0 && runtimeDiag.threadingGapCrossings === 0,
+          startSeparation: runtimeDiag.separation,
+          startThreading: runtimeDiag.threadingScore,
+          solveClearance: spec.geometry.solveClearance,
+          startClearance: spec.startPoseStats.clearance,
+          staticWarnings: staticDiag.checks.filter((check) => check.status === 'warn' || check.status === 'fail').map((check) => check.label),
+        });
+      }
     }
+    const bad = results.filter((row) => row.startSolvedLike || row.solveClearance <= row.startClearance || row.startSeparation > 0.9);
+    const summary = {
+      total: results.length,
+      badCount: bad.length,
+      bad,
+      results,
+    };
+    this.log(`自己診断: ${summary.total} ケース中 ${summary.badCount} 件の要確認。`);
+    return summary;
   }
 
   runDiagnosticsNow() {
@@ -1094,7 +1145,7 @@ seed: ${this.currentSpec.seed}`, 'solved', false);
       this.stepSimulation(dt);
       this.updateCameraFollow();
       this.updateRuntimeUi(false);
-      this.updateSolvedState();
+      this.updateSolvedState(dt);
       this.viewer.sync(this.mujoco, this.model, this.data, this.mjvScene, this.mjvOption, this.mjvPerturb, this.mjvCamera);
       this.viewer.render();
     } else {

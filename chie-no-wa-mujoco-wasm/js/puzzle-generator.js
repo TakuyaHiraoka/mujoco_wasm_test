@@ -21,6 +21,7 @@ import {
   transformSegments,
   minSegmentDistance,
 } from './math.js';
+import { computeThreadingMetrics } from './diagnostics.js';
 
 class Rng {
   constructor(seed = 1) {
@@ -404,6 +405,7 @@ function scoreStartPose(spec, pos, quat) {
   const movingSegments = transformSegments(spec.moving.segmentsLocal, pos, quat);
   const interDistance = minSegmentDistance(spec.fixed.segmentsLocal, movingSegments).distance;
   const clearance = interDistance - 2 * spec.wire.radius;
+  const threading = computeThreadingMetrics(spec, { fixed: fixedPose, moving: movingPose }, movingSegments);
   const mutualHole = 0.5 * (
     holeContainmentScore(movingPose.holeCenter, fixedPose.holeCenter, fixedPose.holeNormal, fixedPose.radius)
     + holeContainmentScore(fixedPose.holeCenter, movingPose.holeCenter, movingPose.holeNormal, movingPose.radius)
@@ -417,7 +419,7 @@ function scoreStartPose(spec, pos, quat) {
     ? -20 - 80 * Math.abs(clearance)
     : clamp01(clearance / (spec.wire.radius * 1.8));
 
-  const score = mutualHole * 3.4 + orthogonality * 1.5 + centerBand * 0.8 + gapMisalignment * 0.6 + clearanceScore;
+  const score = threading.score * 2.4 + mutualHole * 2.2 + orthogonality * 1.2 + centerBand * 0.6 + gapMisalignment * 0.5 + clearanceScore * 0.4;
 
   return {
     score,
@@ -426,6 +428,9 @@ function scoreStartPose(spec, pos, quat) {
     orthogonality,
     mutualHole,
     centerDistance,
+    threadingCrossings: threading.nongapCrossings,
+    threadingGapCrossings: threading.gapCrossings,
+    threadingScore: threading.score,
     fixedPose,
     movingPose,
   };
@@ -497,7 +502,8 @@ function estimateDifficulty(spec, startPose) {
   const gapTightness = clamp01((2.2 - spec.stats.avgGapRatio) / 0.9) * 2.2;
   const twistiness = clamp01(spec.stats.twistProxy / 4.2) * 2.8;
   const startTightness = clamp01((spec.wire.radius * 0.65 - startPose.clearance) / (spec.wire.radius * 0.65)) * 1.8;
-  return clamp(Math.round(complexityBase + gapTightness + twistiness + startTightness), 1, 10);
+  const startThreading = clamp01((startPose.threadingScore ?? 0) / 0.55) * 1.3;
+  return clamp(Math.round(complexityBase + gapTightness + twistiness + startTightness + startThreading), 1, 10);
 }
 
 function makeGenerationLog(spec, startPose) {
@@ -511,6 +517,7 @@ function makeGenerationLog(spec, startPose) {
     `startClearance=${startPose.clearance.toFixed(4)} m`,
     `startCenterDistance=${startPose.centerDistance.toFixed(3)} m`,
     `orthogonality=${(startPose.orthogonality * 100).toFixed(1)} %`,
+    `startThreading=${(startPose.threadingScore ?? 0).toFixed(3)} crossings=${startPose.threadingCrossings ?? 0}`,
   ];
 }
 
@@ -556,6 +563,11 @@ export function generatePuzzleSpec({ seed = 42, complexity = 5 } = {}) {
 
   const startPose = findStartPose(spec, new Rng(seed ^ 0x9E3779B9));
   const solveDistance = fixed.primaryLoopRadius + moving.primaryLoopRadius + Math.max(0.50, fixed.primaryLoopRadius * 0.72);
+  const solveClearance = Math.max(
+    startPose.clearance + Math.max(spec.wire.radius * 2.2, 0.05),
+    spec.wire.radius * 5.0,
+    0.12,
+  );
 
   spec.startPose = {
     pos: startPose.pos,
@@ -565,8 +577,11 @@ export function generatePuzzleSpec({ seed = 42, complexity = 5 } = {}) {
   spec.geometry = {
     startCenterDistance: startPose.centerDistance,
     solveDistance,
-    solveClearance: Math.max(spec.wire.radius * 2.8, 0.032),
-    solveMutualHoleMax: 0.055,
+    solveCenterDistanceMin: solveDistance * 0.96,
+    solveClearance,
+    solveMutualHoleMax: 0.03,
+    solveThreadingScoreMax: 0.02,
+    solveHoldDuration: 0.35,
   };
 
   spec.stats = {
@@ -588,6 +603,9 @@ export function generatePuzzleSpec({ seed = 42, complexity = 5 } = {}) {
     orthogonality: startPose.orthogonality,
     mutualHole: startPose.mutualHole,
     centerDistance: startPose.centerDistance,
+    threadingCrossings: startPose.threadingCrossings ?? 0,
+    threadingGapCrossings: startPose.threadingGapCrossings ?? 0,
+    threadingScore: startPose.threadingScore ?? 0,
   };
 
   return spec;
