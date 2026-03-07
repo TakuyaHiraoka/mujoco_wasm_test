@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import loadMujoco from 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js';
 import { buildPuzzleMjcf, generatePuzzleSpec } from './puzzle-generator.js';
 import { clamp, polylineProgress } from './math.js';
 
@@ -31,6 +30,61 @@ const UI = {
   diagnosticLog: document.getElementById('diagnosticLog'),
   overlayMessage: document.getElementById('overlayMessage'),
 };
+
+const MUJOCO_CDN_CANDIDATES = [
+  {
+    name: 'jsDelivr',
+    moduleUrl: 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js',
+    wasmBase: 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/',
+  },
+  {
+    name: 'unpkg',
+    moduleUrl: 'https://unpkg.com/mujoco-js@0.0.7/dist/mujoco_wasm.js',
+    wasmBase: 'https://unpkg.com/mujoco-js@0.0.7/dist/',
+  },
+];
+
+function timeoutAfter(ms, message) {
+  return new Promise((_, reject) => {
+    window.setTimeout(() => {
+      reject(new Error(message));
+    }, ms);
+  });
+}
+
+async function importMujocoFactory(candidate) {
+  const mod = await Promise.race([
+    import(candidate.moduleUrl),
+    timeoutAfter(15000, `${candidate.name}: JavaScript module import timed out`),
+  ]);
+  return mod?.default ?? mod;
+}
+
+async function loadMujocoWithFallback(log = () => {}) {
+  const errors = [];
+  for (const candidate of MUJOCO_CDN_CANDIDATES) {
+    try {
+      log(`[bootstrap] trying ${candidate.name}`);
+      const factory = await importMujocoFactory(candidate);
+      if (typeof factory !== 'function') {
+        throw new Error('default export is not a loader function');
+      }
+      log(`[bootstrap] imported ${candidate.name} module`);
+      const mujoco = await Promise.race([
+        factory({ locateFile: (path) => `${candidate.wasmBase}${path}` }),
+        timeoutAfter(20000, `${candidate.name}: WASM initialization timed out`),
+      ]);
+      log(`[bootstrap] ready via ${candidate.name}`);
+      return { mujoco, candidate };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(`[bootstrap] failed ${candidate.name}: ${message}`);
+      errors.push(`${candidate.name}: ${message}`);
+    }
+  }
+  throw new Error(`MuJoCo bootstrap failed.
+${errors.join('\n')}`);
+}
 
 class CapsuleGeometry extends THREE.BufferGeometry {
   constructor(radius = 1, length = 1, capSegments = 8, radialSegments = 16) {
@@ -354,22 +408,47 @@ export class PuzzleApp {
     this.bindKeyboard();
     this.readUrlState();
     this.setMode('初期化中');
+
+    const bootstrapLog = [
+      `User-Agent: ${navigator.userAgent}`,
+      `Page: ${window.location.href}`,
+    ];
+    const logBootstrap = (line) => {
+      bootstrapLog.push(line);
+      this.setDiagnosticLog(bootstrapLog.join('\n'));
+    };
+
+    this.setStatus('Loading MuJoCo…', 'loading');
+    this.setDiagnosticSummary('MuJoCo 読み込み中');
+    this.setDiagnosticLog(bootstrapLog.join('\n'));
+
     try {
-      this.mujoco = await loadMujoco();
+      const loaded = await loadMujocoWithFallback(logBootstrap);
+      this.mujoco = loaded.mujoco;
+      this.mujocoSource = loaded.candidate.name;
       this.mujoco.FS.mkdir('/working');
       this.mujoco.FS.mount(this.mujoco.MEMFS, { root: '.' }, '/working');
       this.ready = true;
       this.setStatus('MuJoCo Ready', 'ready');
-      this.setDiagnosticSummary('待機中');
-      this.setDiagnosticLog(`User-Agent: ${navigator.userAgent}
-MjModel.loadFromXML: ${typeof this.mujoco.MjModel?.loadFromXML}
-MjModel.mj_loadXML: ${typeof this.mujoco.MjModel?.mj_loadXML}`);
+      this.setDiagnosticSummary(`待機中 (${this.mujocoSource})`);
+      this.setDiagnosticLog([
+        ...bootstrapLog,
+        `MjModel.loadFromXML: ${typeof this.mujoco.MjModel?.loadFromXML}`,
+        `MjModel.mj_loadXML: ${typeof this.mujoco.MjModel?.mj_loadXML}`,
+      ].join('
+'));
       await this.generateFromUi();
       requestAnimationFrame(this.animate);
     } catch (error) {
       console.error(error);
+      const message = error instanceof Error ? error.message : String(error);
       this.setStatus('Load Error', 'error');
-      this.showOverlay(`MuJoCo の初期化に失敗しました。\n\n${error instanceof Error ? error.message : String(error)}`, 'error', false);
+      this.setDiagnosticSummary('MuJoCo 読み込み失敗');
+      this.setDiagnosticLog([...bootstrapLog, `Fatal: ${message}`].join('
+'));
+      this.showOverlay(`MuJoCo の初期化に失敗しました。
+
+${message}`, 'error', false);
       this.setMode('エラー');
     }
   }
