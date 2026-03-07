@@ -723,20 +723,61 @@ export class PuzzleApp {
 
 
   loadModelFromXml(xmlPath, xmlText = null) {
+    const apiSummary = summarizeMujocoApi(this.mujoco);
+
     if (typeof this.mujoco?.MjModel?.loadFromXML === 'function') {
-      const xmlContent = xmlText ?? this.mujoco.FS.readFile(xmlPath, { encoding: 'utf8' });
-      const model = this.mujoco.MjModel.loadFromXML(xmlContent);
-      if (!model) throw new Error('MjModel.loadFromXML returned null.');
-      return model;
+      let parseOk = true;
+      let parseError = '';
+      if (xmlText && typeof DOMParser !== 'undefined') {
+        try {
+          const parsed = new DOMParser().parseFromString(xmlText, 'application/xml');
+          const errNode = parsed.querySelector('parsererror');
+          if (errNode) {
+            parseOk = false;
+            parseError = (errNode.textContent || '').trim().slice(0, 400);
+          }
+        } catch (error) {
+          parseOk = false;
+          parseError = error instanceof Error ? error.message : String(error);
+        }
+      }
+      if (!parseOk) {
+        throw new Error(`生成した MJCF が XML として不正です。 ${parseError}`);
+      }
+
+      this.log(`MjModel.loadFromXML(path) を試行: ${xmlPath}`);
+      let model = null;
+      try {
+        model = this.mujoco.MjModel.loadFromXML(xmlPath);
+      } catch (error) {
+        this.log(`MjModel.loadFromXML(path) 例外: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+      }
+      if (model) return model;
+
+      if (xmlText) {
+        this.log('MjModel.loadFromXML(path) が null を返したため、文字列入力も試行します。', 'warn');
+        try {
+          model = this.mujoco.MjModel.loadFromXML(xmlText);
+        } catch (error) {
+          this.log(`MjModel.loadFromXML(xmlString) 例外: ${error instanceof Error ? error.message : String(error)}`, 'warn');
+        }
+        if (model) return model;
+      }
+
+      throw new Error(
+        `MjModel.loadFromXML が null を返しました。 path=${xmlPath} xmlLength=${xmlText ? xmlText.length : 0} ` +
+        `XML は整形式です。loadFromXML は path 引数想定の可能性が高いです。 ` +
+        `MjModelKeys=${Object.keys(this.mujoco.MjModel).slice(0, 24).join(',')}`
+      );
     }
 
     if (typeof this.mujoco?.MjModel?.mj_loadXML === 'function') {
+      this.log(`MjModel.mj_loadXML を試行: ${xmlPath}`);
       const model = this.mujoco.MjModel.mj_loadXML(xmlPath);
-      if (!model) throw new Error('MjModel.mj_loadXML returned null.');
+      if (!model) throw new Error(`MjModel.mj_loadXML returned null. path=${xmlPath}`);
       return model;
     }
 
-    const apiSummary = summarizeMujocoApi(this.mujoco);
     throw new Error(
       `MuJoCo API mismatch: MjModel.loadFromXML / MjModel.mj_loadXML の両方が見つかりません。` +
       ` loadedKeys=${apiSummary.topLevelKeys.slice(0, 24).join(',')}`
