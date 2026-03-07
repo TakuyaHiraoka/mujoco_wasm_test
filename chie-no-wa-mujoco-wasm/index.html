@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MuJoCo WASM 3D 知恵の輪ジェネレータ</title>
+  <meta name="description" content="ランダム生成された3Dワイヤー知恵の輪風パズルを、MuJoCo WASM でブラウザ上で遊べる静的サイトです。" />
+  <link rel="stylesheet" href="./style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="appShell">
+    <aside id="hudPanel">
+      <div class="panel-header">
+        <div>
+          <h1>MuJoCo WASM 3D 知恵の輪</h1>
+          <p class="sub">ランダム生成されたワイヤー脱出パズルを解く</p>
+        </div>
+        <div id="statusBadge" class="badge loading">Loading MuJoCo…</div>
+      </div>
+
+      <section class="panel-section">
+        <div class="section-title">生成設定</div>
+        <label class="field">
+          <span>複雑性</span>
+          <div class="range-row">
+            <input id="complexity" type="range" min="1" max="10" step="1" value="5" />
+            <strong id="complexityValue">5</strong>
+          </div>
+        </label>
+
+        <label class="field">
+          <span>Seed</span>
+          <div class="inline-row">
+            <input id="seedInput" type="number" step="1" value="42" />
+            <button id="randomizeSeed" class="btn secondary" type="button">ランダム</button>
+          </div>
+        </label>
+
+        <div class="button-row">
+          <button id="generateBtn" class="btn primary" type="button">新しいパズルを生成</button>
+          <button id="resetBtn" class="btn secondary" type="button">初期位置へ戻す</button>
+        </div>
+      </section>
+
+      <section class="panel-section stats-grid">
+        <div class="stat-card">
+          <span class="stat-label">曲がり角</span>
+          <strong id="turnCount">-</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">ゲート数</span>
+          <strong id="gateCount">-</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">ワイヤー長</span>
+          <strong id="wireLength">-</strong>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label">進捗</span>
+          <strong id="progressValue">0%</strong>
+        </div>
+      </section>
+
+      <section class="panel-section">
+        <div class="section-title">プレイ状態</div>
+        <div class="inline-meta">
+          <span>経過時間</span>
+          <strong id="timerValue">00:00.0</strong>
+        </div>
+        <div class="inline-meta">
+          <span>現在の Seed</span>
+          <strong id="seedEcho">-</strong>
+        </div>
+        <div class="inline-meta">
+          <span>モード</span>
+          <strong id="modeValue">未開始</strong>
+        </div>
+        <div class="toggle-list">
+          <label class="toggle"><input id="guideToggle" type="checkbox" checked /> ガイドライン表示</label>
+          <label class="toggle"><input id="followToggle" type="checkbox" checked /> カメラ追従</label>
+          <label class="toggle"><input id="turboHintToggle" type="checkbox" checked /> Shift で加速</label>
+        </div>
+        <div class="button-row">
+          <button id="pauseBtn" class="btn secondary" type="button">一時停止</button>
+          <button id="shareBtn" class="btn secondary" type="button">URL をコピー</button>
+        </div>
+      </section>
+
+      <section class="panel-section objective-box">
+        <div class="section-title">目的</div>
+        <p>
+          青いリングをワイヤーに沿って進め、すべてのゲートを抜けて右端の出口から外してください。
+          キー操作で <strong>平行移動 + 回転</strong> を加えられます。
+        </p>
+      </section>
+
+      <details class="panel-section help-box" open>
+        <summary>操作方法</summary>
+        <div class="help-grid">
+          <div>
+            <h3>移動</h3>
+            <p><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>：カメラ基準で前後左右</p>
+            <p><kbd>R</kbd><kbd>F</kbd>：上 / 下</p>
+            <p><kbd>Shift</kbd>：推力を増やす</p>
+          </div>
+          <div>
+            <h3>回転</h3>
+            <p><kbd>I</kbd><kbd>K</kbd>：ピッチ</p>
+            <p><kbd>J</kbd><kbd>L</kbd>：ヨー</p>
+            <p><kbd>U</kbd><kbd>O</kbd>：ロール</p>
+          </div>
+          <div>
+            <h3>ビュー</h3>
+            <p>マウスドラッグ：カメラ回転</p>
+            <p>ホイール：ズーム</p>
+            <p><kbd>C</kbd>：カメラ再センタリング</p>
+          </div>
+          <div>
+            <h3>その他</h3>
+            <p><kbd>Space</kbd>：一時停止 / 再開</p>
+            <p><kbd>Backspace</kbd>：リセット</p>
+            <p><kbd>G</kbd>：ガイド表示切替</p>
+          </div>
+        </div>
+      </details>
+    </aside>
+
+    <main id="viewerPanel">
+      <div id="canvasWrap"></div>
+      <div id="overlayMessage" class="overlay hidden"></div>
+    </main>
+  </div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>
