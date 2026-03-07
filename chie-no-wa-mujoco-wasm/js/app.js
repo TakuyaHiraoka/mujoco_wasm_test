@@ -1001,17 +1001,27 @@ export class PuzzleApp {
 
   updateSolvedState() {
     if (!this.currentSpec || !this.currentRuntimeDiagnostics || this.solved) return;
-    if (
-      this.currentRuntimeDiagnostics.centerDistance > this.currentSpec.geometry.solveDistance
-      && this.currentRuntimeDiagnostics.contactCount === 0
-    ) {
+    const diag = this.currentRuntimeDiagnostics;
+    const solved = (
+      diag.interPieceClearance > this.currentSpec.geometry.solveClearance
+      && diag.mutualHole < this.currentSpec.geometry.solveMutualHoleMax
+      && diag.centerDistance > this.currentSpec.geometry.solveDistance * 0.72
+      && diag.contactCount === 0
+      && diag.speed < 1.25
+      && diag.angularSpeed < 4.0
+    );
+    if (solved) {
       this.solved = true;
       this.paused = true;
       this.updatePauseButton();
       this.updateRuntimeUi(true);
       this.setMode('クリア');
-      this.log(`クリア: ${formatTime(this.elapsed)} seed=${this.currentSpec.seed}`);
-      this.showOverlay(`クリア！\n\n経過時間: ${formatTime(this.elapsed)}\nfamily: ${this.currentSpec.family.id}\nseed: ${this.currentSpec.seed}`, 'solved', false);
+      this.log(`クリア: ${formatTime(this.elapsed)} seed=${this.currentSpec.seed} clearance=${diag.interPieceClearance.toFixed(4)} mutualHole=${diag.mutualHole.toFixed(3)}`);
+      this.showOverlay(`クリア！
+
+経過時間: ${formatTime(this.elapsed)}
+family: ${this.currentSpec.family.id}
+seed: ${this.currentSpec.seed}`, 'solved', false);
     }
   }
 

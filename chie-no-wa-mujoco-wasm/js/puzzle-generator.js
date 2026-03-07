@@ -565,6 +565,8 @@ export function generatePuzzleSpec({ seed = 42, complexity = 5 } = {}) {
   spec.geometry = {
     startCenterDistance: startPose.centerDistance,
     solveDistance,
+    solveClearance: Math.max(spec.wire.radius * 2.8, 0.032),
+    solveMutualHoleMax: 0.055,
   };
 
   spec.stats = {

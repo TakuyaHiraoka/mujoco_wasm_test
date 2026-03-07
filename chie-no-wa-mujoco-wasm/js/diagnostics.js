@@ -165,11 +165,26 @@ export function runStaticDiagnostics(spec) {
 export function buildRuntimeDiagnostics(spec, pose) {
   const markers = computePoseGeometry(spec, pose);
   const centerDistance = distance(markers.fixed.holeCenter, markers.moving.holeCenter);
-  const separation = clamp(
-    (centerDistance - spec.geometry.startCenterDistance) / (spec.geometry.solveDistance - spec.geometry.startCenterDistance),
-    0,
-    1.25,
+  const movingSegments = transformSegments(spec.moving.segmentsLocal, pose.pos ?? spec.startPose.pos, pose.quat ?? spec.startPose.quat);
+  const segmentDistance = minSegmentDistance(spec.fixed.segmentsLocal, movingSegments).distance;
+  const interPieceClearance = segmentDistance - 2 * spec.wire.radius;
+  const mutualHole = 0.5 * (
+    holeContainmentScore(markers.moving.holeCenter, markers.fixed.holeCenter, markers.fixed.holeNormal, markers.fixed.radius)
+    + holeContainmentScore(markers.fixed.holeCenter, markers.moving.holeCenter, markers.moving.holeNormal, markers.moving.radius)
   );
+  const clearanceTarget = spec.geometry.solveClearance ?? Math.max(spec.wire.radius * 2.4, 0.03);
+  const clearanceProgress = clamp(
+    (interPieceClearance - (spec.startPoseStats?.clearance ?? 0)) / Math.max(clearanceTarget - (spec.startPoseStats?.clearance ?? 0), 1e-6),
+    0,
+    1,
+  );
+  const disentanglementProgress = clamp(1 - mutualHole, 0, 1);
+  const distanceProgress = clamp(
+    (centerDistance - spec.geometry.startCenterDistance) / Math.max(spec.geometry.solveDistance - spec.geometry.startCenterDistance, 1e-6),
+    0,
+    1,
+  );
+  const separation = clamp(0.55 * clearanceProgress + 0.35 * disentanglementProgress + 0.10 * distanceProgress, 0, 1);
   const normalAngle = radiansToDegrees(Math.acos(clamp(Math.abs(dot(markers.fixed.holeNormal, markers.moving.holeNormal)), -1, 1)));
   const gapAlignment = radiansToDegrees(Math.acos(clamp(dot(markers.fixed.gapOut, markers.moving.gapOut), -1, 1)));
   const speed = length(pose.linvel ?? [0, 0, 0]);
@@ -180,9 +195,15 @@ export function buildRuntimeDiagnostics(spec, pose) {
   if (speed > 5) warnings.push('線速度が大きいです。推力を下げると安定します。');
   if (angularSpeed > 14) warnings.push('角速度が大きいです。');
   if ((pose.ncon ?? 0) > 18) warnings.push('接触数が多いです。局所的に詰まっている可能性があります。');
+  if (separation > 0.95 && mutualHole > 0.12) warnings.push('分離度が高すぎます。まだループが噛んでいる可能性があります。');
 
   return {
     centerDistance,
+    segmentDistance,
+    interPieceClearance,
+    mutualHole,
+    clearanceProgress,
+    distanceProgress,
     separation,
     normalAngleDeg: normalAngle,
     gapAlignmentDeg: gapAlignment,
@@ -209,6 +230,8 @@ export function formatStaticDiagnostics(diag) {
 export function formatRuntimeDiagnostics(diag) {
   const lines = [
     `separation=${(diag.separation * 100).toFixed(1)} %`,
+    `interPieceClearance=${diag.interPieceClearance.toFixed(4)} m`,
+    `mutualHole=${diag.mutualHole.toFixed(3)}`,
     `centerDistance=${diag.centerDistance.toFixed(3)} m`,
     `loopNormalAngle=${diag.normalAngleDeg.toFixed(1)} °`,
     `gapAlignment=${diag.gapAlignmentDeg.toFixed(1)} °`,
