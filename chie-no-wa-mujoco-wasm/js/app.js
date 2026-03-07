@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import loadMujoco from 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js';
 import { buildPuzzleMjcf, generatePuzzleSpec } from './puzzle-generator.js';
 import {
   buildDiagnosticsBundle,
@@ -47,6 +46,51 @@ const UI = {
   overlayMessage: document.getElementById('overlayMessage'),
 };
 
+
+
+const MUJOCO_CANDIDATE_URLS = [
+  'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js',
+  'https://unpkg.com/mujoco-js@0.0.7/dist/mujoco_wasm.js',
+];
+
+async function importWithTimeout(url, timeoutMs = 20000) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      import(url),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`Timed out while importing ${url}`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function loadMujocoBindings(log = () => {}) {
+  const failures = [];
+  for (const url of MUJOCO_CANDIDATE_URLS) {
+    try {
+      log(`MuJoCo module を読み込み中: ${url}`);
+      const mod = await importWithTimeout(url, 20000);
+      const loader = mod?.default;
+      if (typeof loader !== 'function') {
+        throw new Error('module default export is not a function');
+      }
+      log(`MuJoCo loader を初期化中: ${url}`);
+      const mujoco = await Promise.race([
+        loader(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`Timed out while initializing MuJoCo from ${url}`)), 30000)),
+      ]);
+      return { mujoco, sourceUrl: url };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`${url} :: ${message}`);
+      log(`MuJoCo candidate failed: ${url} :: ${message}`, 'warn');
+    }
+  }
+  throw new Error(`MuJoCo module の読み込みに失敗しました。 ${failures.join(' | ')}`);
+}
 
 
 function summarizeMujocoApi(mujoco) {
@@ -448,7 +492,9 @@ export class PuzzleApp {
     this.readUrlState();
     this.setMode('初期化中');
     try {
-      this.mujoco = await loadMujoco();
+      const loadResult = await loadMujocoBindings((msg, level = 'info') => this.log(msg, level));
+      this.mujoco = loadResult.mujoco;
+      this.mujocoSourceUrl = loadResult.sourceUrl;
       try {
         this.mujoco.FS.mkdir('/working');
       } catch {
@@ -458,7 +504,7 @@ export class PuzzleApp {
       this.ready = true;
       this.setStatus('MuJoCo Ready', 'ready');
       const apiSummary = summarizeMujocoApi(this.mujoco);
-      this.log('MuJoCo WASM を初期化しました。');
+      this.log(`MuJoCo WASM を初期化しました。 source=${this.mujocoSourceUrl}`);
       this.log(`MuJoCo API: staticLoad=${apiSummary.hasStaticMjLoadXml}, legacyModel=${apiSummary.hasLegacyModelCtor}, mjData=${apiSummary.hasMjDataClass}, mj_step=${apiSummary.hasMjStep}`);
       window.__mujocoApiSummary = apiSummary;
       await this.generateFromUi();
@@ -493,6 +539,7 @@ export class PuzzleApp {
       downloadSpec: () => this.downloadSpec(),
       downloadMjcf: () => this.downloadMjcf(),
       getLogText: () => this.eventLog.join('\n'),
+      getMujocoSourceUrl: () => this.mujocoSourceUrl,
       reset: () => this.resetPuzzle(),
     };
   }
