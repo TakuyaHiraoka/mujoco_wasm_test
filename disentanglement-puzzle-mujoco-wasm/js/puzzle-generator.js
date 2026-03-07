@@ -9,6 +9,7 @@ import {
   formatVec,
   length,
   lerp,
+  minSegmentDistance,
   normalize,
   pointsToSegments,
   polylineLength,
@@ -19,9 +20,13 @@ import {
   transformDirection,
   transformPoint,
   transformSegments,
-  minSegmentDistance,
 } from './math.js';
 import { computeThreadingMetrics } from './diagnostics.js';
+
+function normalizeLocale(locale) {
+  if (!locale) return 'ja';
+  return String(locale).toLowerCase().startsWith('en') ? 'en' : 'ja';
+}
 
 class Rng {
   constructor(seed = 1) {
@@ -30,7 +35,7 @@ class Rng {
   }
 
   next() {
-    let t = this.state += 0x6D2B79F5;
+    let t = (this.state += 0x6D2B79F5);
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
@@ -38,10 +43,6 @@ class Rng {
 
   float(min = 0, max = 1) {
     return lerp(min, max, this.next());
-  }
-
-  int(min, max) {
-    return Math.floor(this.float(min, max + 1));
   }
 
   sign() {
@@ -56,8 +57,14 @@ class Rng {
 const FAMILY_LIBRARY = [
   {
     id: 'alpha-hook',
-    label: 'alpha-hook',
-    description: '主ループに片側フック尾を持つ基本系。ギャップ合わせとひねりの両方が必要。',
+    labels: {
+      ja: 'alpha-hook',
+      en: 'Alpha Hook',
+    },
+    descriptions: {
+      ja: '主ループに片側フック尾を持つ基本系。ギャップ合わせとひねりの両方が必要。',
+      en: 'A basic family with a one-sided hooked tail. It usually requires both gap alignment and twisting.',
+    },
     primaryLobes: 1,
     radialWave: 0.05,
     zLift: 0.18,
@@ -68,8 +75,14 @@ const FAMILY_LIBRARY = [
   },
   {
     id: 'alpha-zig',
-    label: 'alpha-zig',
-    description: '両端にジグザグ尾を持つ系。姿勢自由度が増え、開始姿勢の抜け道が減る。',
+    labels: {
+      ja: 'alpha-zig',
+      en: 'Alpha Zig',
+    },
+    descriptions: {
+      ja: '両端にジグザグ尾を持つ系。姿勢自由度が増え、開始姿勢の抜け道が減る。',
+      en: 'A family with zig-zag tails on both ends. It adds pose freedom and reduces trivial starting escapes.',
+    },
     primaryLobes: 1,
     radialWave: 0.02,
     zLift: 0.24,
@@ -80,8 +93,14 @@ const FAMILY_LIBRARY = [
   },
   {
     id: 'alpha-lobed',
-    label: 'alpha-lobed',
-    description: '主ループ自体に外側ローブを持つ系。見た目は素朴だが有効開口が読みづらい。',
+    labels: {
+      ja: 'alpha-lobed',
+      en: 'Alpha Lobed',
+    },
+    descriptions: {
+      ja: '主ループ自体に外側ローブを持つ系。見た目は素朴だが有効開口が読みづらい。',
+      en: 'A family whose primary loop contains outward lobes. It looks simple but makes the effective opening harder to read.',
+    },
     primaryLobes: 3,
     radialWave: 0.12,
     zLift: 0.14,
@@ -92,8 +111,14 @@ const FAMILY_LIBRARY = [
   },
   {
     id: 'alpha-guard',
-    label: 'alpha-guard',
-    description: '片側にガード状の二重尾を持つ系。開口の向きを合わせても一手で抜けにくい。',
+    labels: {
+      ja: 'alpha-guard',
+      en: 'Alpha Guard',
+    },
+    descriptions: {
+      ja: '片側にガード状の二重尾を持つ系。開口の向きを合わせても一手で抜けにくい。',
+      en: 'A family with a guard-like double tail on one side. Even after aligning the opening, it rarely slips out in a single move.',
+    },
     primaryLobes: 2,
     radialWave: 0.08,
     zLift: 0.22,
@@ -103,6 +128,15 @@ const FAMILY_LIBRARY = [
     tailScale: 1.15,
   },
 ];
+
+export function localizeFamily(family, locale = 'ja') {
+  const normalized = normalizeLocale(locale);
+  return {
+    ...family,
+    label: family.labels?.[normalized] ?? family.id,
+    description: family.descriptions?.[normalized] ?? family.id,
+  };
+}
 
 function pushPoint(points, point) {
   const last = points[points.length - 1];
@@ -118,33 +152,91 @@ function estimatePrimaryLoopRadius(points) {
 
 function buildTail(style, endpoint, out, side, normal, baseLength, handedness = 1, bias = 1) {
   const sign = handedness;
-  const lengthA = baseLength * bias;
+  const scaledLength = baseLength * bias;
+
   if (style === 'straight') {
     return [
-      add(endpoint, add(scale(out, lengthA * 0.45), scale(side, sign * lengthA * 0.08))),
-      add(endpoint, add(scale(out, lengthA), scale(normal, lengthA * 0.10))),
+      add(endpoint, add(scale(out, scaledLength * 0.45), scale(side, sign * scaledLength * 0.08))),
+      add(endpoint, add(scale(out, scaledLength), scale(normal, scaledLength * 0.10))),
     ];
   }
+
   if (style === 'hook') {
     return [
-      add(endpoint, add(scale(out, lengthA * 0.25), scale(side, sign * lengthA * 0.12))),
-      add(endpoint, add(add(scale(out, lengthA * 0.62), scale(side, sign * lengthA * 0.36)), scale(normal, lengthA * 0.18))),
-      add(endpoint, add(add(scale(out, lengthA * 0.95), scale(side, sign * lengthA * 0.48)), scale(normal, lengthA * 0.28))),
+      add(endpoint, add(scale(out, scaledLength * 0.25), scale(side, sign * scaledLength * 0.12))),
+      add(
+        endpoint,
+        add(
+          add(scale(out, scaledLength * 0.62), scale(side, sign * scaledLength * 0.36)),
+          scale(normal, scaledLength * 0.18),
+        ),
+      ),
+      add(
+        endpoint,
+        add(
+          add(scale(out, scaledLength * 0.95), scale(side, sign * scaledLength * 0.48)),
+          scale(normal, scaledLength * 0.28),
+        ),
+      ),
     ];
   }
+
   if (style === 'zigzag') {
     return [
-      add(endpoint, add(add(scale(out, lengthA * 0.24), scale(side, sign * lengthA * 0.16)), scale(normal, lengthA * 0.14))),
-      add(endpoint, add(add(scale(out, lengthA * 0.58), scale(side, sign * lengthA * -0.12)), scale(normal, lengthA * 0.30))),
-      add(endpoint, add(add(scale(out, lengthA * 0.92), scale(side, sign * lengthA * 0.22)), scale(normal, lengthA * 0.05))),
+      add(
+        endpoint,
+        add(
+          add(scale(out, scaledLength * 0.24), scale(side, sign * scaledLength * 0.16)),
+          scale(normal, scaledLength * 0.14),
+        ),
+      ),
+      add(
+        endpoint,
+        add(
+          add(scale(out, scaledLength * 0.58), scale(side, sign * scaledLength * -0.12)),
+          scale(normal, scaledLength * 0.30),
+        ),
+      ),
+      add(
+        endpoint,
+        add(
+          add(scale(out, scaledLength * 0.92), scale(side, sign * scaledLength * 0.22)),
+          scale(normal, scaledLength * 0.05),
+        ),
+      ),
     ];
   }
+
   if (style === 'guard') {
     return [
-      add(endpoint, add(add(scale(out, lengthA * 0.20), scale(side, sign * lengthA * 0.20)), scale(normal, lengthA * 0.08))),
-      add(endpoint, add(add(scale(out, lengthA * 0.46), scale(side, sign * lengthA * 0.42)), scale(normal, lengthA * 0.18))),
-      add(endpoint, add(add(scale(out, lengthA * 0.76), scale(side, sign * lengthA * 0.18)), scale(normal, lengthA * 0.34))),
-      add(endpoint, add(add(scale(out, lengthA * 1.02), scale(side, sign * lengthA * 0.34)), scale(normal, lengthA * 0.46))),
+      add(
+        endpoint,
+        add(
+          add(scale(out, scaledLength * 0.20), scale(side, sign * scaledLength * 0.20)),
+          scale(normal, scaledLength * 0.08),
+        ),
+      ),
+      add(
+        endpoint,
+        add(
+          add(scale(out, scaledLength * 0.46), scale(side, sign * scaledLength * 0.42)),
+          scale(normal, scaledLength * 0.18),
+        ),
+      ),
+      add(
+        endpoint,
+        add(
+          add(scale(out, scaledLength * 0.76), scale(side, sign * scaledLength * 0.18)),
+          scale(normal, scaledLength * 0.34),
+        ),
+      ),
+      add(
+        endpoint,
+        add(
+          add(scale(out, scaledLength * 1.02), scale(side, sign * scaledLength * 0.34)),
+          scale(normal, scaledLength * 0.46),
+        ),
+      ),
     ];
   }
 
@@ -191,10 +283,6 @@ function samplePrimaryLoop({
   const gapCenter = scale(add(loopStart, loopEnd), 0.5);
   const gapOut = normalize(gapCenter);
   const primaryLoopRadius = estimatePrimaryLoopRadius(centered);
-  const tangents = {
-    start: normalize(sub(centered[1], centered[0])),
-    end: normalize(sub(centered[centered.length - 1], centered[centered.length - 2])),
-  };
 
   return {
     points: centered,
@@ -209,7 +297,6 @@ function samplePrimaryLoop({
       centerLocal: gapCenter,
       outLocal: gapOut,
     },
-    tangents,
   };
 }
 
@@ -218,18 +305,29 @@ function mirrorY(points, sign) {
   return points.map((point) => [point[0], -point[1], point[2]]);
 }
 
-function buildPieceGeometry(pieceIR) {
+function computeExtents(points) {
+  const xs = points.map((point) => point[0]);
+  const ys = points.map((point) => point[1]);
+  const zs = points.map((point) => point[2]);
+
+  return {
+    min: [Math.min(...xs), Math.min(...ys), Math.min(...zs)],
+    max: [Math.max(...xs), Math.max(...ys), Math.max(...zs)],
+  };
+}
+
+function buildPieceGeometry(pieceIr) {
   const loop = samplePrimaryLoop({
-    radius: pieceIR.loopRadius,
-    wireRadius: pieceIR.wireRadius,
-    desiredGapRatio: pieceIR.gapRatio,
-    samples: pieceIR.samples,
-    lobes: pieceIR.primaryLobes,
-    radialWave: pieceIR.radialWave,
-    zLift: pieceIR.zLift,
-    phase: pieceIR.phase,
-    xScale: pieceIR.xScale,
-    yScale: pieceIR.yScale,
+    radius: pieceIr.loopRadius,
+    wireRadius: pieceIr.wireRadius,
+    desiredGapRatio: pieceIr.gapRatio,
+    samples: pieceIr.samples,
+    lobes: pieceIr.primaryLobes,
+    radialWave: pieceIr.radialWave,
+    zLift: pieceIr.zLift,
+    phase: pieceIr.phase,
+    xScale: pieceIr.xScale,
+    yScale: pieceIr.yScale,
   });
 
   const loopStart = loop.points[0];
@@ -239,47 +337,50 @@ function buildPieceGeometry(pieceIR) {
   const sideStart = normalize([-outStart[1], outStart[0], 0]);
   const sideEnd = normalize([-outEnd[1], outEnd[0], 0]);
   const normal = [0, 0, 1];
-  const tailLength = pieceIR.tailLength;
+  const tailLength = pieceIr.tailLength;
 
   const prefixTail = buildTail(
-    pieceIR.tailStyleA,
+    pieceIr.tailStyleA,
     loopStart,
     outStart,
     sideStart,
     normal,
-    tailLength * pieceIR.tailScaleA,
-    pieceIR.handedness,
-    pieceIR.tailBiasA,
+    tailLength * pieceIr.tailScaleA,
+    pieceIr.handedness,
+    pieceIr.tailBiasA,
   );
 
   const suffixTail = buildTail(
-    pieceIR.tailStyleB,
+    pieceIr.tailStyleB,
     loopEnd,
     outEnd,
     sideEnd,
     normal,
-    tailLength * pieceIR.tailScaleB,
-    -pieceIR.handedness,
-    pieceIR.tailBiasB,
+    tailLength * pieceIr.tailScaleB,
+    -pieceIr.handedness,
+    pieceIr.tailBiasB,
   );
 
   const points = [];
-  mirrorY(prefixTail, pieceIR.handedness).slice().reverse().forEach((point) => pushPoint(points, point));
-  mirrorY(loop.points, pieceIR.handedness).forEach((point) => pushPoint(points, point));
-  mirrorY(suffixTail, pieceIR.handedness).forEach((point) => pushPoint(points, point));
+  mirrorY(prefixTail, pieceIr.handedness)
+    .slice()
+    .reverse()
+    .forEach((point) => pushPoint(points, point));
+  mirrorY(loop.points, pieceIr.handedness).forEach((point) => pushPoint(points, point));
+  mirrorY(suffixTail, pieceIr.handedness).forEach((point) => pushPoint(points, point));
 
-  const transformedGapA = mirrorY([loop.gap.aLocal], pieceIR.handedness)[0];
-  const transformedGapB = mirrorY([loop.gap.bLocal], pieceIR.handedness)[0];
-  const transformedGapCenter = mirrorY([loop.gap.centerLocal], pieceIR.handedness)[0];
-  const transformedGapOut = normalize(mirrorY([loop.gap.outLocal], pieceIR.handedness)[0]);
+  const transformedGapA = mirrorY([loop.gap.aLocal], pieceIr.handedness)[0];
+  const transformedGapB = mirrorY([loop.gap.bLocal], pieceIr.handedness)[0];
+  const transformedGapCenter = mirrorY([loop.gap.centerLocal], pieceIr.handedness)[0];
+  const transformedGapOut = normalize(mirrorY([loop.gap.outLocal], pieceIr.handedness)[0]);
 
-  const piece = {
-    ...pieceIR,
+  return {
+    ...pieceIr,
     pointsLocal: points,
     segmentsLocal: pointsToSegments(points),
-    primaryLoopPointsLocal: mirrorY(loop.points, pieceIR.handedness),
+    primaryLoopPointsLocal: mirrorY(loop.points, pieceIr.handedness),
     primaryLoopRadius: loop.primaryLoopRadius,
-    loopNormalLocal: pieceIR.handedness > 0 ? [0, 0, 1] : [0, 0, 1],
+    loopNormalLocal: [0, 0, 1],
     holeCenterLocal: [0, 0, 0],
     gap: {
       ...loop.gap,
@@ -293,33 +394,27 @@ function buildPieceGeometry(pieceIR) {
     wireLength: polylineLength(points),
     extents: computeExtents(points),
   };
-
-  return piece;
-}
-
-function computeExtents(points) {
-  const xs = points.map((point) => point[0]);
-  const ys = points.map((point) => point[1]);
-  const zs = points.map((point) => point[2]);
-  return {
-    min: [Math.min(...xs), Math.min(...ys), Math.min(...zs)],
-    max: [Math.max(...xs), Math.max(...ys), Math.max(...zs)],
-  };
 }
 
 function chooseFamily(rng, complexityNorm) {
-  const bucket = complexityNorm < 0.35
-    ? FAMILY_LIBRARY.slice(0, 3)
-    : complexityNorm < 0.7
-      ? FAMILY_LIBRARY
-      : [FAMILY_LIBRARY[0], FAMILY_LIBRARY[1], FAMILY_LIBRARY[3], FAMILY_LIBRARY[2]];
+  const bucket =
+    complexityNorm < 0.35
+      ? FAMILY_LIBRARY.slice(0, 3)
+      : complexityNorm < 0.7
+        ? FAMILY_LIBRARY
+        : [FAMILY_LIBRARY[0], FAMILY_LIBRARY[1], FAMILY_LIBRARY[3], FAMILY_LIBRARY[2]];
   return rng.pick(bucket);
 }
 
-function buildPieceIR(role, family, wireRadius, radius, complexityNorm, rng) {
+function buildPieceIr(role, family, wireRadius, radius, complexityNorm, rng) {
   const phase = rng.float(0, Math.PI * 2);
   const gapRatio = lerp(2.15, 1.42, complexityNorm) * rng.float(0.97, 1.03);
-  const tailLength = radius * lerp(0.40, 0.62, complexityNorm) * family.tailScale * rng.float(0.95, 1.08);
+  const tailLength =
+    radius *
+    lerp(0.40, 0.62, complexityNorm) *
+    family.tailScale *
+    rng.float(0.95, 1.08);
+
   return {
     role,
     familyId: family.id,
@@ -353,8 +448,8 @@ function buildIntrinsicPuzzle(seed, complexity) {
   const fixedRadius = lerp(0.43, 0.52, complexityNorm) * rng.float(0.97, 1.03);
   const movingRadius = fixedRadius * rng.float(0.88, 0.95);
 
-  const fixedIR = buildPieceIR('fixed', family, wireRadius, fixedRadius, complexityNorm, rng);
-  const movingIR = buildPieceIR('moving', family, wireRadius, movingRadius, complexityNorm, rng);
+  const fixedIr = buildPieceIr('fixed', family, wireRadius, fixedRadius, complexityNorm, rng);
+  const movingIr = buildPieceIr('moving', family, wireRadius, movingRadius, complexityNorm, rng);
 
   return {
     seed,
@@ -362,7 +457,10 @@ function buildIntrinsicPuzzle(seed, complexity) {
     complexityNorm,
     family,
     wireRadius,
-    pieces: { fixed: fixedIR, moving: movingIR },
+    pieces: {
+      fixed: fixedIr,
+      moving: movingIr,
+    },
     nodes: [
       { id: 'F.loop0', type: 'loop', piece: 'fixed' },
       { id: 'F.gap0', type: 'gap', piece: 'fixed', on: 'F.loop0' },
@@ -406,20 +504,43 @@ function scoreStartPose(spec, pos, quat) {
   const interDistance = minSegmentDistance(spec.fixed.segmentsLocal, movingSegments).distance;
   const clearance = interDistance - 2 * spec.wire.radius;
   const threading = computeThreadingMetrics(spec, { fixed: fixedPose, moving: movingPose }, movingSegments);
-  const mutualHole = 0.5 * (
-    holeContainmentScore(movingPose.holeCenter, fixedPose.holeCenter, fixedPose.holeNormal, fixedPose.radius)
-    + holeContainmentScore(fixedPose.holeCenter, movingPose.holeCenter, movingPose.holeNormal, movingPose.radius)
-  );
+
+  const mutualHole =
+    0.5 *
+    (
+      holeContainmentScore(
+        movingPose.holeCenter,
+        fixedPose.holeCenter,
+        fixedPose.holeNormal,
+        fixedPose.radius,
+      ) +
+      holeContainmentScore(
+        fixedPose.holeCenter,
+        movingPose.holeCenter,
+        movingPose.holeNormal,
+        movingPose.radius,
+      )
+    );
+
   const normalDot = Math.abs(dot(fixedPose.holeNormal, movingPose.holeNormal));
   const orthogonality = 1 - normalDot;
   const centerDistance = distance(fixedPose.holeCenter, movingPose.holeCenter);
-  const centerBand = clamp01(1 - Math.abs(centerDistance - spec.fixed.primaryLoopRadius * 0.58) / (spec.fixed.primaryLoopRadius * 0.34));
+  const centerBand = clamp01(
+    1 - Math.abs(centerDistance - spec.fixed.primaryLoopRadius * 0.58) / (spec.fixed.primaryLoopRadius * 0.34),
+  );
   const gapMisalignment = clamp01(0.5 * (1 - dot(fixedPose.gapOut, movingPose.gapOut)));
-  const clearanceScore = clearance < 0
-    ? -20 - 80 * Math.abs(clearance)
-    : clamp01(clearance / (spec.wire.radius * 1.8));
+  const clearanceScore =
+    clearance < 0
+      ? -20 - 80 * Math.abs(clearance)
+      : clamp01(clearance / (spec.wire.radius * 1.8));
 
-  const score = threading.score * 2.4 + mutualHole * 2.2 + orthogonality * 1.2 + centerBand * 0.6 + gapMisalignment * 0.5 + clearanceScore * 0.4;
+  const score =
+    threading.score * 2.4 +
+    mutualHole * 2.2 +
+    orthogonality * 1.2 +
+    centerBand * 0.6 +
+    gapMisalignment * 0.5 +
+    clearanceScore * 0.4;
 
   return {
     score,
@@ -436,14 +557,14 @@ function scoreStartPose(spec, pos, quat) {
   };
 }
 
-function findStartPose(spec, rng) {
+function findStartPose(spec) {
   const radius = spec.fixed.primaryLoopRadius;
   const pitchValues = [-0.14, 0, 0.14];
   const yawValues = [-0.42, -0.18, 0, 0.18, 0.42];
   const rollValues = [-0.26, 0, 0.26];
-  const xValues = [0.46, 0.56, 0.66, 0.76].map((v) => v * radius);
-  const yValues = [-0.16, 0, 0.16].map((v) => v * radius);
-  const zValues = [-0.16, 0, 0.16].map((v) => v * radius);
+  const xValues = [0.46, 0.56, 0.66, 0.76].map((value) => value * radius);
+  const yValues = [-0.16, 0, 0.16].map((value) => value * radius);
+  const zValues = [-0.16, 0, 0.16].map((value) => value * radius);
 
   let best = null;
 
@@ -451,11 +572,13 @@ function findStartPose(spec, rng) {
     for (const yaw of yawValues) {
       for (const roll of rollValues) {
         const quat = quatFromEulerXYZ(Math.PI * 0.5 + pitchDelta, yaw, roll);
+
         for (const x of xValues) {
           for (const y of yValues) {
             for (const z of zValues) {
               const pos = [x, y, z];
               const candidate = scoreStartPose(spec, pos, quat);
+
               if (!best || candidate.score > best.score) {
                 best = {
                   ...candidate,
@@ -482,6 +605,7 @@ function findStartPose(spec, rng) {
   const refinedPos = best.pos.slice();
   let refinedClearance = best.clearance;
   let guard = 0;
+
   while (refinedClearance < spec.wire.radius * 0.10 && guard < 30) {
     refinedPos[0] += spec.wire.radius * 0.18;
     const rescored = scoreStartPose(spec, refinedPos, best.quat);
@@ -501,9 +625,17 @@ function estimateDifficulty(spec, startPose) {
   const complexityBase = spec.complexity * 0.65;
   const gapTightness = clamp01((2.2 - spec.stats.avgGapRatio) / 0.9) * 2.2;
   const twistiness = clamp01(spec.stats.twistProxy / 4.2) * 2.8;
-  const startTightness = clamp01((spec.wire.radius * 0.65 - startPose.clearance) / (spec.wire.radius * 0.65)) * 1.8;
+  const startTightness =
+    clamp01((spec.wire.radius * 0.65 - startPose.clearance) / (spec.wire.radius * 0.65)) * 1.8;
   const startThreading = clamp01((startPose.threadingScore ?? 0) / 0.55) * 1.3;
-  return clamp(Math.round(complexityBase + gapTightness + twistiness + startTightness + startThreading), 1, 10);
+
+  return clamp(
+    Math.round(
+      complexityBase + gapTightness + twistiness + startTightness + startThreading,
+    ),
+    1,
+    10,
+  );
 }
 
 function makeGenerationLog(spec, startPose) {
@@ -525,23 +657,46 @@ function rgbaString(r, g, b, a) {
   return `${r.toFixed(4)} ${g.toFixed(4)} ${b.toFixed(4)} ${a.toFixed(4)}`;
 }
 
+function indentLines(text, count) {
+  const indent = ' '.repeat(count);
+  return text
+    .split('\n')
+    .map((line) => `${indent}${line}`)
+    .join('\n');
+}
+
 function pieceGeomsXml(piece, radius, rgba, density, namePrefix) {
-  return piece.segmentsLocal.map((segment, index) => (
-    `      <geom name="${namePrefix}_${index}" type="capsule" fromto="${formatVec(segment.a)} ${formatVec(segment.b)}" size="${radius.toFixed(6)}" density="${density.toFixed(2)}" rgba="${rgba}" friction="0.35 0.01 0.0004"/>`
-  )).join('\n');
+  return piece.segmentsLocal
+    .map((segment, index) => {
+      const fromto = `${formatVec(segment.a)} ${formatVec(segment.b)}`;
+      return [
+        `<geom`,
+        `  name="${namePrefix}-seg-${index}"`,
+        `  type="capsule"`,
+        `  fromto="${fromto}"`,
+        `  size="${radius.toFixed(6)}"`,
+        `  rgba="${rgba}"`,
+        `  density="${density}"`,
+        `  friction="0.60 0.02 0.002"`,
+        `  solref="0.004 1"`,
+        `  solimp="0.995 0.999 0.0005"`,
+        `  condim="3"`,
+        `/>`,
+      ].join('\n');
+    })
+    .join('\n');
 }
 
 export function generatePuzzleSpec({ seed = 42, complexity = 5 } = {}) {
   const safeComplexity = clamp(Math.round(complexity), 1, 10);
   const ir = buildIntrinsicPuzzle(seed, safeComplexity);
-
   const fixed = buildPieceGeometry(ir.pieces.fixed);
   const moving = buildPieceGeometry(ir.pieces.moving);
 
   const spec = {
     seed,
     complexity: safeComplexity,
-    family: ir.family,
+    family: { ...ir.family },
     ir,
     wire: {
       radius: ir.wireRadius,
@@ -551,18 +706,31 @@ export function generatePuzzleSpec({ seed = 42, complexity = 5 } = {}) {
     moving,
   };
 
-  const avgGapRatio = ((fixed.gap.width / spec.wire.diameter) + (moving.gap.width / spec.wire.diameter)) * 0.5;
-  const twistProxy = (
-    fixed.zLift / spec.wire.diameter
-    + moving.zLift / spec.wire.diameter
-    + fixed.primaryLobes * 0.4
-    + moving.primaryLobes * 0.4
-    + fixed.twistBias * 0.55
-    + moving.twistBias * 0.55
-  );
+  const avgGapRatio =
+    ((fixed.gap.width / spec.wire.diameter) + (moving.gap.width / spec.wire.diameter)) * 0.5;
 
-  const startPose = findStartPose(spec, new Rng(seed ^ 0x9E3779B9));
-  const solveDistance = fixed.primaryLoopRadius + moving.primaryLoopRadius + Math.max(0.50, fixed.primaryLoopRadius * 0.72);
+  const twistProxy =
+    fixed.zLift / spec.wire.diameter +
+    moving.zLift / spec.wire.diameter +
+    fixed.primaryLobes * 0.4 +
+    moving.primaryLobes * 0.4 +
+    fixed.twistBias * 0.55 +
+    moving.twistBias * 0.55;
+
+  spec.stats = {
+    fixedWireLength: fixed.wireLength,
+    movingWireLength: moving.wireLength,
+    totalWireLength: fixed.wireLength + moving.wireLength,
+    avgGapRatio,
+    fixedGapAngleDeg: fixed.gap.angleDeg,
+    movingGapAngleDeg: moving.gap.angleDeg,
+    twistProxy,
+    mechanismCount: ir.nodes.length + ir.relations.length,
+  };
+
+  const startPose = findStartPose(spec);
+  const solveDistance =
+    fixed.primaryLoopRadius + moving.primaryLoopRadius + Math.max(0.50, fixed.primaryLoopRadius * 0.72);
   const solveClearance = Math.max(
     startPose.clearance + Math.max(spec.wire.radius * 2.2, 0.05),
     spec.wire.radius * 5.0,
@@ -582,17 +750,6 @@ export function generatePuzzleSpec({ seed = 42, complexity = 5 } = {}) {
     solveMutualHoleMax: 0.03,
     solveThreadingScoreMax: 0.02,
     solveHoldDuration: 0.35,
-  };
-
-  spec.stats = {
-    fixedWireLength: fixed.wireLength,
-    movingWireLength: moving.wireLength,
-    totalWireLength: fixed.wireLength + moving.wireLength,
-    avgGapRatio,
-    fixedGapAngleDeg: fixed.gap.angleDeg,
-    movingGapAngleDeg: moving.gap.angleDeg,
-    twistProxy,
-    mechanismCount: ir.nodes.length + ir.relations.length,
   };
 
   spec.stats.estimatedDifficulty = estimateDifficulty(spec, startPose);
@@ -615,39 +772,30 @@ export function buildPuzzleMjcf(spec) {
   const fixedRgba = rgbaString(0.78, 0.81, 0.87, 1.0);
   const movingRgba = rgbaString(0.30, 0.86, 0.98, 1.0);
 
-  return `
-<mujoco model="topological_wire_disentanglement">
-  <compiler angle="radian" inertiafromgeom="true"/>
-  <option timestep="0.0025" gravity="0 0 0" iterations="90" integrator="implicitfast"/>
-  <size nconmax="8192" njmax="16384"/>
+  const fixedXml = indentLines(pieceGeomsXml(spec.fixed, spec.wire.radius, fixedRgba, 650, 'fixed'), 4);
+  const movingXml = indentLines(pieceGeomsXml(spec.moving, spec.wire.radius, movingRgba, 420, 'moving'), 6);
 
-  <default>
-    <geom condim="3" solref="0.004 1" solimp="0.93 0.985 0.001"/>
-    <joint damping="0.18"/>
-  </default>
-
-  <visual>
-    <global offwidth="1440" offheight="900"/>
-    <map fogstart="5" fogend="13" force="0.005"/>
-    <rgba haze="0.04 0.05 0.07 1"/>
-  </visual>
-
-  <asset>
-    <texture name="sky" type="skybox" builtin="gradient" rgb1="0.06 0.08 0.12" rgb2="0.00 0.00 0.00" width="512" height="3072"/>
-  </asset>
-
-  <worldbody>
-    <light pos="0 0 3.6" dir="0 0 -1" directional="true" diffuse="1 1 1" specular="0.2 0.2 0.2"/>
-    <light pos="-2.4 -2.2 2.0" directional="false" diffuse="0.55 0.65 0.75"/>
-    <geom name="ambient_floor" type="plane" pos="0 0 -2.2" size="10 10 0.1" rgba="0.05 0.06 0.08 1" contype="0" conaffinity="0"/>
-
-${pieceGeomsXml(spec.fixed, spec.wire.radius, fixedRgba, 650, 'fixed')}
-
-    <body name="moving" pos="${formatVec(spec.startPose.pos)}" quat="${formatQuat(spec.startPose.quat)}">
-      <joint name="moving_free" type="free"/>
-${pieceGeomsXml(spec.moving, spec.wire.radius, movingRgba, 420, 'moving')}
-    </body>
-  </worldbody>
-</mujoco>
-  `.trim();
+  return [
+    `<mujoco model="chie-no-wa">`,
+    `  <compiler angle="radian" autolimits="true"/>`,
+    `  <size njmax="12000" nconmax="2000"/>`,
+    `  <option timestep="0.0025" gravity="0 0 0" iterations="80" integrator="Euler"/>`,
+    `  <default>`,
+    `    <joint damping="0.25"/>`,
+    `    <geom condim="3" friction="0.60 0.02 0.002" solref="0.004 1" solimp="0.995 0.999 0.0005"/>`,
+    `  </default>`,
+    `  <visual>`,
+    `    <map znear="0.001" zfar="40"/>`,
+    `  </visual>`,
+    `  <worldbody>`,
+    `    <light pos="2 -2 4" dir="-0.3 0.3 -1"/>`,
+    `    <geom name="floor" type="plane" pos="0 0 -2.5" size="6 6 0.2" rgba="0.03 0.04 0.06 1" contype="0" conaffinity="0"/>`,
+    fixedXml,
+    `    <body name="player" pos="${formatVec(spec.startPose.pos)}" quat="${formatQuat(spec.startPose.quat)}">`,
+    `      <freejoint name="player-free"/>`,
+    movingXml,
+    `    </body>`,
+    `  </worldbody>`,
+    `</mujoco>`,
+  ].join('\n');
 }

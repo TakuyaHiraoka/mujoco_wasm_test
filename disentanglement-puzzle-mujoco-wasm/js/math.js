@@ -87,12 +87,15 @@ export function polylineLength(points) {
 export function pointsToSegments(points, closed = false) {
   const segments = [];
   const limit = closed ? points.length : points.length - 1;
+
   for (let i = 0; i < limit; i += 1) {
     const a = points[i];
     const b = points[(i + 1) % points.length];
     const delta = sub(b, a);
     const segLength = length(delta);
+
     if (segLength < EPS) continue;
+
     segments.push({
       index: i,
       a,
@@ -101,6 +104,7 @@ export function pointsToSegments(points, closed = false) {
       length: segLength,
     });
   }
+
   return segments;
 }
 
@@ -109,12 +113,12 @@ export function formatVec(v) {
 }
 
 export function formatQuat(q) {
-  const nq = quatNormalize(q);
-  return `${nq[0].toFixed(6)} ${nq[1].toFixed(6)} ${nq[2].toFixed(6)} ${nq[3].toFixed(6)}`;
+  const normalized = quatNormalize(q);
+  return `${normalized[0].toFixed(6)} ${normalized[1].toFixed(6)} ${normalized[2].toFixed(6)} ${normalized[3].toFixed(6)}`;
 }
 
 export function radiansToDegrees(radians) {
-  return radians * 180 / Math.PI;
+  return (radians * 180) / Math.PI;
 }
 
 export function quatIdentity() {
@@ -131,13 +135,21 @@ export function quatConjugate(q) {
   return [q[0], -q[1], -q[2], -q[3]];
 }
 
-export function quatMultiply(a, b) {
-  return quatNormalize([
+export function quatMultiplyRaw(a, b) {
+  return [
     a[0] * b[0] - a[1] * b[1] - a[2] * b[2] - a[3] * b[3],
     a[0] * b[1] + a[1] * b[0] + a[2] * b[3] - a[3] * b[2],
     a[0] * b[2] - a[1] * b[3] + a[2] * b[0] + a[3] * b[1],
     a[0] * b[3] + a[1] * b[2] - a[2] * b[1] + a[3] * b[0],
-  ]);
+  ];
+}
+
+export function quatMultiply(a, b) {
+  return quatMultiplyRaw(a, b);
+}
+
+export function quatCompose(a, b) {
+  return quatNormalize(quatMultiplyRaw(a, b));
 }
 
 export function quatFromAxisAngle(axis, angle) {
@@ -151,15 +163,15 @@ export function quatFromEulerXYZ(x, y, z) {
   const qx = quatFromAxisAngle([1, 0, 0], x);
   const qy = quatFromAxisAngle([0, 1, 0], y);
   const qz = quatFromAxisAngle([0, 0, 1], z);
-  return quatMultiply(qz, quatMultiply(qy, qx));
+  return quatNormalize(quatMultiplyRaw(qz, quatMultiplyRaw(qy, qx)));
 }
 
 export function applyQuat(q, v) {
-  const nq = quatNormalize(q);
-  const p = [0, v[0], v[1], v[2]];
-  const qp = quatMultiply(nq, p);
-  const result = quatMultiply(qp, quatConjugate(nq));
-  return [result[1], result[2], result[3]];
+  const normalized = quatNormalize(q);
+  const pointQuat = [0, v[0], v[1], v[2]];
+  const qp = quatMultiplyRaw(normalized, pointQuat);
+  const rotated = quatMultiplyRaw(qp, quatConjugate(normalized));
+  return [rotated[1], rotated[2], rotated[3]];
 }
 
 export function transformPoint(point, pos, quat) {
@@ -171,11 +183,20 @@ export function transformDirection(direction, quat) {
 }
 
 export function transformSegments(segments, pos, quat) {
-  return segments.map((segment) => ({
-    ...segment,
-    a: transformPoint(segment.a, pos, quat),
-    b: transformPoint(segment.b, pos, quat),
-  }));
+  return segments.map((segment) => {
+    const a = transformPoint(segment.a, pos, quat);
+    const b = transformPoint(segment.b, pos, quat);
+    const delta = sub(b, a);
+    const segLength = length(delta);
+
+    return {
+      ...segment,
+      a,
+      b,
+      dir: segLength < EPS ? [0, 0, 0] : scale(delta, 1 / segLength),
+      length: segLength,
+    };
+  });
 }
 
 export function projectPointOntoPlane(point, planeCenter, planeNormal) {
@@ -188,81 +209,91 @@ export function segmentSegmentDistance(a0, a1, b0, b1) {
   const u = sub(a1, a0);
   const v = sub(b1, b0);
   const w = sub(a0, b0);
+
   const a = dot(u, u);
   const b = dot(u, v);
   const c = dot(v, v);
   const d = dot(u, w);
   const e = dot(v, w);
-  const D = a * c - b * b;
-  let sN = D;
-  let tN = D;
-  let sD = D;
-  let tD = D;
+  const determinant = a * c - b * b;
 
-  if (D < EPS) {
-    sN = 0;
-    sD = 1;
-    tN = e;
-    tD = c;
+  let sNumerator = determinant;
+  let tNumerator = determinant;
+  let sDenominator = determinant;
+  let tDenominator = determinant;
+
+  if (determinant < EPS) {
+    sNumerator = 0;
+    sDenominator = 1;
+    tNumerator = e;
+    tDenominator = c;
   } else {
-    sN = b * e - c * d;
-    tN = a * e - b * d;
-    if (sN < 0) {
-      sN = 0;
-      tN = e;
-      tD = c;
-    } else if (sN > sD) {
-      sN = sD;
-      tN = e + b;
-      tD = c;
+    sNumerator = b * e - c * d;
+    tNumerator = a * e - b * d;
+
+    if (sNumerator < 0) {
+      sNumerator = 0;
+      tNumerator = e;
+      tDenominator = c;
+    } else if (sNumerator > sDenominator) {
+      sNumerator = sDenominator;
+      tNumerator = e + b;
+      tDenominator = c;
     }
   }
 
-  if (tN < 0) {
-    tN = 0;
+  if (tNumerator < 0) {
+    tNumerator = 0;
+
     if (-d < 0) {
-      sN = 0;
+      sNumerator = 0;
     } else if (-d > a) {
-      sN = sD;
+      sNumerator = sDenominator;
     } else {
-      sN = -d;
-      sD = a;
+      sNumerator = -d;
+      sDenominator = a;
     }
-  } else if (tN > tD) {
-    tN = tD;
+  } else if (tNumerator > tDenominator) {
+    tNumerator = tDenominator;
+
     if (-d + b < 0) {
-      sN = 0;
+      sNumerator = 0;
     } else if (-d + b > a) {
-      sN = sD;
+      sNumerator = sDenominator;
     } else {
-      sN = -d + b;
-      sD = a;
+      sNumerator = -d + b;
+      sDenominator = a;
     }
   }
 
-  const sc = Math.abs(sN) < EPS ? 0 : sN / sD;
-  const tc = Math.abs(tN) < EPS ? 0 : tN / tD;
-  const dP = add(w, sub(scale(u, sc), scale(v, tc)));
-  return length(dP);
+  const sc = Math.abs(sNumerator) < EPS ? 0 : sNumerator / sDenominator;
+  const tc = Math.abs(tNumerator) < EPS ? 0 : tNumerator / tDenominator;
+  const delta = add(w, sub(scale(u, sc), scale(v, tc)));
+
+  return length(delta);
 }
 
 export function minSegmentDistance(segmentsA, segmentsB, skip = null) {
   let best = Infinity;
   let pair = null;
+
   for (let i = 0; i < segmentsA.length; i += 1) {
     for (let j = 0; j < segmentsB.length; j += 1) {
       if (skip && skip(i, j, segmentsA[i], segmentsB[j])) continue;
+
       const dist = segmentSegmentDistance(
         segmentsA[i].a,
         segmentsA[i].b,
         segmentsB[j].a,
         segmentsB[j].b,
       );
+
       if (dist < best) {
         best = dist;
         pair = [i, j];
       }
     }
   }
+
   return { distance: best, pair };
 }
