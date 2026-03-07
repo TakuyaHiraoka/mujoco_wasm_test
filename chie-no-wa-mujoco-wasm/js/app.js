@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import loadMujoco from 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco_wasm.js';
+import loadMujoco from 'https://cdn.jsdelivr.net/npm/mujoco-js@0.0.7/dist/mujoco.js';
 import { buildPuzzleMjcf, generatePuzzleSpec } from './puzzle-generator.js';
 import {
   buildDiagnosticsBundle,
@@ -46,6 +46,26 @@ const UI = {
   copyLogBtn: document.getElementById('copyLogBtn'),
   overlayMessage: document.getElementById('overlayMessage'),
 };
+
+
+
+function summarizeMujocoApi(mujoco) {
+  const summary = {
+    topLevelKeys: Object.keys(mujoco).filter((k) => !k.startsWith('_')).sort(),
+    hasFS: !!mujoco?.FS,
+    hasMEMFS: !!mujoco?.MEMFS,
+    hasMjModelClass: !!mujoco?.MjModel,
+    hasMjDataClass: !!mujoco?.MjData,
+    hasStaticMjLoadXml: typeof mujoco?.MjModel?.mj_loadXML === 'function',
+    hasLegacyModelCtor: typeof mujoco?.Model === 'function',
+    hasStateCtor: typeof mujoco?.State === 'function',
+    hasSimulationCtor: typeof mujoco?.Simulation === 'function',
+    hasMjStep: typeof mujoco?.mj_step === 'function',
+    hasMjForward: typeof mujoco?.mj_forward === 'function',
+    hasMjResetData: typeof mujoco?.mj_resetData === 'function',
+  };
+  return summary;
+}
 
 class CapsuleGeometry extends THREE.BufferGeometry {
   constructor(radius = 1, length = 1, capSegments = 8, radialSegments = 16) {
@@ -437,7 +457,10 @@ export class PuzzleApp {
       this.mujoco.FS.mount(this.mujoco.MEMFS, { root: '.' }, '/working');
       this.ready = true;
       this.setStatus('MuJoCo Ready', 'ready');
+      const apiSummary = summarizeMujocoApi(this.mujoco);
       this.log('MuJoCo WASM を初期化しました。');
+      this.log(`MuJoCo API: staticLoad=${apiSummary.hasStaticMjLoadXml}, legacyModel=${apiSummary.hasLegacyModelCtor}, mjData=${apiSummary.hasMjDataClass}, mj_step=${apiSummary.hasMjStep}`);
+      window.__mujocoApiSummary = apiSummary;
       await this.generateFromUi();
       this.exposeDebugApi();
       requestAnimationFrame(this.animate);
@@ -649,6 +672,36 @@ export class PuzzleApp {
     }
   }
 
+
+
+  loadModelFromXml(xmlPath) {
+    if (typeof this.mujoco?.MjModel?.mj_loadXML === 'function') {
+      const model = this.mujoco.MjModel.mj_loadXML(xmlPath);
+      if (!model) throw new Error('MjModel.mj_loadXML returned null.');
+      return model;
+    }
+
+    const apiSummary = summarizeMujocoApi(this.mujoco);
+    throw new Error(
+      `MuJoCo API mismatch: MjModel.mj_loadXML が見つかりません。` +
+      ` loadedKeys=${apiSummary.topLevelKeys.slice(0, 24).join(',')}`
+    );
+  }
+
+  createDataForModel(model) {
+    if (typeof this.mujoco?.MjData === 'function') {
+      const data = new this.mujoco.MjData(model);
+      if (!data) throw new Error('Failed to create mjData.');
+      return data;
+    }
+
+    const apiSummary = summarizeMujocoApi(this.mujoco);
+    throw new Error(
+      `MuJoCo API mismatch: MjData constructor が見つかりません。` +
+      ` loadedKeys=${apiSummary.topLevelKeys.slice(0, 24).join(',')}`
+    );
+  }
+
   async generateFromUi() {
     if (!this.ready) return;
     const seed = Math.trunc(Number(UI.seedInput.value) || 0) || 1;
@@ -669,10 +722,8 @@ export class PuzzleApp {
       this.currentMjcf = buildPuzzleMjcf(this.currentSpec);
 
       this.mujoco.FS.writeFile('/working/puzzle.xml', this.currentMjcf);
-      this.model = this.mujoco.MjModel.mj_loadXML('/working/puzzle.xml');
-      if (!this.model) throw new Error('MjModel.mj_loadXML returned null.');
-      this.data = new this.mujoco.MjData(this.model);
-      if (!this.data) throw new Error('Failed to create mjData.');
+      this.model = this.loadModelFromXml('/working/puzzle.xml');
+      this.data = this.createDataForModel(this.model);
 
       this.mjvScene = new this.mujoco.MjvScene(this.model, 2 ** 15);
       this.mjvOption = new this.mujoco.MjvOption();
