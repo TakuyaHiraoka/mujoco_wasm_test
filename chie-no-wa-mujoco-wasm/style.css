@@ -65,27 +65,6 @@ body {
   margin-bottom: 18px;
 }
 
-.header-copy {
-  min-width: 0;
-}
-
-.header-side {
-  display: grid;
-  justify-items: end;
-  gap: 10px;
-}
-
-.lang-picker {
-  display: grid;
-  gap: 4px;
-  font-size: 0.82rem;
-  color: var(--muted);
-}
-
-.lang-picker select {
-  min-width: 9rem;
-}
-
 h1 {
   margin: 0;
   font-size: 1.35rem;
@@ -156,8 +135,7 @@ h1 {
   margin-bottom: 6px;
 }
 
-input[type="number"],
-select {
+input[type="number"] {
   width: 100%;
   min-width: 0;
   border-radius: 12px;
@@ -166,10 +144,6 @@ select {
   color: var(--text);
   padding: 10px 12px;
   font-size: 0.95rem;
-}
-
-select {
-  cursor: pointer;
 }
 
 input[type="range"] {
@@ -214,10 +188,7 @@ input[type="range"] {
   border-radius: 12px;
   padding: 10px 14px;
   cursor: pointer;
-  transition:
-    transform 0.15s ease,
-    background 0.15s ease,
-    border-color 0.15s ease;
+  transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
 }
 
 .btn:hover {
@@ -395,14 +366,5 @@ kbd {
 
   #viewerPanel {
     height: min(68vh, 720px);
-  }
-
-  .panel-header {
-    flex-direction: column;
-  }
-
-  .header-side {
-    width: 100%;
-    justify-items: stretch;
   }
 }

@@ -23,6 +23,6 @@
 - **Video (Draemon-ekakiuta)**:  
   https://drive.google.com/file/d/1y8FW6fOYE7B-ekIlk1e1Q3UbIb7sUvVH/view?usp=sharing
 
-## Disentanglement Puzzle
+## Chie-no-wa
 - **Demo**  
-  https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/disentanglement-puzzle-mujoco-wasm/
+  https://takuyahiraoka.github.io/Mujoco-Wasm-Playground/chie-no-wa-mujoco-wasm/
